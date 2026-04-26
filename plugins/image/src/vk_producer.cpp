@@ -79,6 +79,8 @@ VkProducer::~VkProducer() {
             vkFreeMemory(device_, staging_mem_, nullptr);
         if (signal_sem_ != VK_NULL_HANDLE)
             vkDestroySemaphore(device_, signal_sem_, nullptr);
+        if (release_timeline_sem_ != VK_NULL_HANDLE)
+            vkDestroySemaphore(device_, release_timeline_sem_, nullptr);
         if (cmd_pool_ != VK_NULL_HANDLE)
             vkDestroyCommandPool(device_, cmd_pool_, nullptr);
         if (image_ != VK_NULL_HANDLE)  vkDestroyImage(device_, image_, nullptr);
@@ -145,6 +147,9 @@ VkProducer::create(uint32_t width, uint32_t height, uint32_t flags,
         VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
         VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+        // Required for the release timeline syncobj. Core in Vulkan 1.2;
+        // we target 1.1 so explicitly enable the KHR ext.
+        VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
     };
     // VK_EXT_physical_device_drm is optional. When present we use it to
     // report the renderer's DRM render-node to the daemon so it can
@@ -180,8 +185,16 @@ VkProducer::create(uint32_t width, uint32_t height, uint32_t flags,
     std::vector<const char*> dev_exts(std::begin(req_dev_exts), std::end(req_dev_exts));
     if (have_drm_ext) dev_exts.push_back(DRM_EXT);
 
+    // Enable the timeline_semaphore device feature so we can create
+    // VK_SEMAPHORE_TYPE_TIMELINE semaphores. The KHR struct alias is
+    // wire-compatible with the 1.2 core struct.
+    VkPhysicalDeviceTimelineSemaphoreFeaturesKHR ts_feat {};
+    ts_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+    ts_feat.timelineSemaphore = VK_TRUE;
+
     VkDeviceCreateInfo dci {};
     dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dci.pNext                   = &ts_feat;
     dci.queueCreateInfoCount    = 1;
     dci.pQueueCreateInfos       = &qci;
     dci.enabledExtensionCount   = static_cast<uint32_t>(dev_exts.size());
@@ -259,7 +272,7 @@ VkProducer::create(uint32_t width, uint32_t height, uint32_t flags,
         return nullptr;
     }
 
-    // --- Export semaphore (SYNC_FD) ------------------------------------
+    // --- Acquire semaphore (binary, exported as SYNC_FD) ---------------
     VkExportSemaphoreCreateInfo exp_sem {};
     exp_sem.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
     exp_sem.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
@@ -269,7 +282,34 @@ VkProducer::create(uint32_t width, uint32_t height, uint32_t flags,
     if (VkResult r = vkCreateSemaphore(self->device_, &sem_ci, nullptr,
                                        &self->signal_sem_);
         r != VK_SUCCESS) {
-        fail(err, std::string("vkCreateSemaphore: ") + vk_result_str(r));
+        fail(err, std::string("vkCreateSemaphore(acquire): ") + vk_result_str(r));
+        return nullptr;
+    }
+
+    // --- Release semaphore (TIMELINE, exported as OPAQUE_FD) -----------
+    // OPAQUE_FD round-trips to a drm_syncobj on Mesa drivers; the daemon
+    // imports this fd and DRM_IOCTL_SYNCOBJ_TRANSFERs consumer release
+    // fences onto each frame's release_point. This producer only WAITs
+    // on the timeline; SIGNAL is the daemon's job.
+    VkSemaphoreTypeCreateInfoKHR ts_type {};
+    ts_type.sType         = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR;
+    ts_type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR;
+    ts_type.initialValue  = 0;
+
+    VkExportSemaphoreCreateInfo exp_release {};
+    exp_release.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+    exp_release.pNext       = &ts_type;
+    exp_release.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+
+    VkSemaphoreCreateInfo release_ci {};
+    release_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    release_ci.pNext = &exp_release;
+    if (VkResult r = vkCreateSemaphore(self->device_, &release_ci, nullptr,
+                                       &self->release_timeline_sem_);
+        r != VK_SUCCESS) {
+        fail(err,
+             std::string("vkCreateSemaphore(release timeline): ")
+                 + vk_result_str(r));
         return nullptr;
     }
 
@@ -537,6 +577,7 @@ bool VkProducer::rebuild(uint32_t flags, std::string* err) {
 }
 
 int VkProducer::upload_and_submit(const uint8_t* data, size_t size,
+                                  uint64_t wait_release_point,
                                   std::string* err) {
     if (size != staging_size_) {
         fail(err, "upload size mismatch (expected tightly-packed RGBA)");
@@ -610,12 +651,35 @@ int VkProducer::upload_and_submit(const uint8_t* data, size_t size,
         return -1;
     }
 
+    // Gate the submit on the previous frame's release_point if there is
+    // one (skip on the very first submit). Binary acquire signal value
+    // is unused but the timeline submit info requires the array to be
+    // the same length as pSignalSemaphores.
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    const uint64_t wait_value = wait_release_point;
+    const uint64_t signal_value = 0; // signal_sem_ is binary; ignored.
+
+    VkTimelineSemaphoreSubmitInfoKHR ts_info {};
+    ts_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR;
+    if (wait_release_point > 0) {
+        ts_info.waitSemaphoreValueCount = 1;
+        ts_info.pWaitSemaphoreValues    = &wait_value;
+    }
+    ts_info.signalSemaphoreValueCount = 1;
+    ts_info.pSignalSemaphoreValues    = &signal_value;
+
     VkSubmitInfo si {};
     si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.pNext                = &ts_info;
     si.commandBufferCount   = 1;
     si.pCommandBuffers      = &cmd_;
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &signal_sem_;
+    if (wait_release_point > 0) {
+        si.waitSemaphoreCount = 1;
+        si.pWaitSemaphores    = &release_timeline_sem_;
+        si.pWaitDstStageMask  = &wait_stage;
+    }
     if (VkResult r = vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
         r != VK_SUCCESS) {
         fail(err, std::string("vkQueueSubmit: ") + vk_result_str(r));
@@ -635,6 +699,26 @@ int VkProducer::upload_and_submit(const uint8_t* data, size_t size,
         return -1;
     }
     return sync_fd;
+}
+
+int VkProducer::export_release_syncobj_fd(std::string* err) {
+    if (release_timeline_sem_ == VK_NULL_HANDLE || !vkGetSemaphoreFdKHR_) {
+        fail(err, "release timeline semaphore not initialised");
+        return -1;
+    }
+    VkSemaphoreGetFdInfoKHR gfi {};
+    gfi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+    gfi.semaphore  = release_timeline_sem_;
+    gfi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+    int fd = -1;
+    if (VkResult r = vkGetSemaphoreFdKHR_(device_, &gfi, &fd);
+        r != VK_SUCCESS) {
+        fail(err,
+             std::string("vkGetSemaphoreFdKHR(release timeline OPAQUE_FD): ")
+                 + vk_result_str(r));
+        return -1;
+    }
+    return fd;
 }
 
 } // namespace ww_image

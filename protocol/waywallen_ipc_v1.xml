@@ -45,6 +45,15 @@
     - Every `frame_ready` MUST carry exactly one acquire sync_fd
       (dma_fence sync_file). v1 does not support sync-less producers.
     - `seq` on `frame_ready` is monotonically increasing.
+    - The subprocess MUST emit exactly one `release_syncobj` event after
+      `ready` and before any `frame_ready`. The fd is an OPAQUE_FD export
+      of a Vulkan timeline semaphore (= a drm_syncobj on Mesa drivers)
+      that the subprocess owns and uses to gate dma-buf reuse. Each
+      `frame_ready.release_point` names the timeline value the daemon
+      will signal once every consumer has finished sampling that frame.
+      The subprocess MUST `vkSemaphoreWait` (or equivalent) on
+      `release_syncobj@release_point` before re-recording into the same
+      `image_index`.
 
   Version: 1
 -->
@@ -178,17 +187,42 @@
   <!--
     A frame was produced. `image_index` indexes into the fd array
     delivered by the preceding `bind_buffers`. Always carries exactly
-    one sync_fd (dma_fence sync_file) as SCM_RIGHTS.
+    one sync_fd (dma_fence sync_file) as SCM_RIGHTS — the acquire fence
+    that consumers must wait on before sampling.
+
+    `release_point` is the timeline value the daemon will signal on the
+    `release_syncobj` (see opcode 5) once every consumer subscribed at
+    `frame_ready` time has finished its GPU work. The producer MUST
+    record the (image_index, release_point) pair and gate the next
+    submit into `image_index` on `release_syncobj@release_point`.
   -->
   <event name="frame_ready" opcode="3">
     <arg name="image_index" type="u32"/>
     <arg name="seq" type="u64"/>
     <arg name="ts_ns" type="u64"/>
+    <arg name="release_point" type="u64"/>
     <fds count="1"/>
   </event>
 
   <event name="error" opcode="4">
     <arg name="msg" type="string"/>
+  </event>
+
+  <!--
+    Export the producer-owned timeline drm_syncobj used to gate dma-buf
+    reuse. Sent exactly once per connection, after `ready` and before
+    any `frame_ready`. The fd is `VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD`
+    of a Vulkan TIMELINE semaphore (which on Mesa is backed by a
+    drm_syncobj — the daemon manipulates it via `DRM_IOCTL_SYNCOBJ_*`
+    rather than re-importing into Vulkan).
+
+    The daemon merges every consumer's release fence for a frame and
+    transfers the merged fence to `release_point` on this syncobj using
+    `DRM_IOCTL_SYNCOBJ_TRANSFER`. The producer's later submit that
+    re-uses the same `image_index` waits on the same point.
+  -->
+  <event name="release_syncobj" opcode="5">
+    <fds count="1"/>
   </event>
 
 </protocol>

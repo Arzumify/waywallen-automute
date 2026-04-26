@@ -62,6 +62,18 @@ pub enum DisplayOutEvent {
         buffer_generation: u64,
         buffer_index: u32,
         seq: u64,
+        /// Timeline value the producer assigned to this frame on its
+        /// release_syncobj. The endpoint reports this back to the
+        /// reaper alongside the per-consumer binary syncobj it
+        /// allocates.
+        release_point: u64,
+        /// Total number of consumer endpoints the router dispatched
+        /// this `release_point` to (i.e. fan-out width). The reaper
+        /// uses it to bucket per-consumer FrameRecords with the same
+        /// release_point and only TRANSFER once every consumer has
+        /// signaled — preventing the producer from racing against a
+        /// late consumer.
+        expected_count: u32,
     },
 }
 
@@ -290,9 +302,11 @@ impl Router {
                             router.on_renderer_bind(&rid).await;
                         }
                         Ok(EventMsg::FrameReady {
-                            image_index, seq, ..
+                            image_index, seq, release_point, ..
                         }) => {
-                            router.on_renderer_frame(&rid, image_index, seq).await;
+                            router
+                                .on_renderer_frame(&rid, image_index, seq, release_point)
+                                .await;
                         }
                         Ok(_) => {}
                         Err(RecvError::Closed) => {
@@ -767,6 +781,7 @@ impl Router {
         renderer_id: &str,
         buffer_index: u32,
         seq: u64,
+        release_point: u64,
     ) {
         let inner = self.inner.lock().await;
         let Some(renderer) = inner.table.get_renderer(renderer_id) else {
@@ -778,24 +793,34 @@ impl Router {
             .ok()
             .and_then(|g| g.as_ref().map(|s| s.generation));
         let Some(gen) = gen else { return };
-        for link in inner.table.links_for_renderer(renderer_id) {
-            if !link.enabled {
-                continue;
-            }
-            let Some(state) = inner.displays.get(&link.display_id) else {
-                continue;
-            };
-            // Only forward if the display is currently bound to this gen.
-            if state.last_buffer_generation != Some(gen)
-                || state.last_renderer.as_deref() != Some(renderer_id)
-            {
-                continue;
-            }
+
+        // First pass: collect every display that should get this frame
+        // so we can pre-compute fan-out width — the reaper needs it to
+        // know how many consumer FrameRecords to wait for at this
+        // `release_point` before TRANSFERing.
+        let recipients: Vec<&DisplayState> = inner
+            .table
+            .links_for_renderer(renderer_id)
+            .into_iter()
+            .filter(|link| link.enabled)
+            .filter_map(|link| inner.displays.get(&link.display_id))
+            .filter(|state| {
+                state.last_buffer_generation == Some(gen)
+                    && state.last_renderer.as_deref() == Some(renderer_id)
+            })
+            .collect();
+        let expected_count = recipients.len() as u32;
+        if expected_count == 0 {
+            return;
+        }
+        for state in recipients {
             let _ = state.tx.send(DisplayOutEvent::Frame {
                 renderer: renderer.clone(),
                 buffer_generation: gen,
                 buffer_index,
                 seq,
+                release_point,
+                expected_count,
             });
         }
     }

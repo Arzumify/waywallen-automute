@@ -100,10 +100,21 @@ int ww_bridge_send_bind_buffers(int sock,
                                 const ww_evt_bind_buffers_t *m,
                                 const int *fds);
 
-/* Emit `FrameReady` with a single acquire sync_fd (dma_fence sync_file). */
+/* Emit `FrameReady` with a single acquire sync_fd (dma_fence sync_file).
+ * `m->release_point` names the timeline value the daemon will signal on
+ * the producer-exported `release_syncobj` once every consumer has
+ * finished sampling this frame. */
 int ww_bridge_send_frame_ready(int sock,
                                const ww_evt_frame_ready_t *m,
                                int sync_fd);
+
+/* Emit `ReleaseSyncobj` carrying the producer's exported timeline
+ * drm_syncobj fd. Send exactly once per connection, after `Ready` and
+ * before any `FrameReady`. The fd is the OPAQUE_FD export of a Vulkan
+ * TIMELINE semaphore on the renderer's `VkDevice`. The caller retains
+ * ownership of `release_syncobj_fd` and is responsible for closing it
+ * after this call returns (the kernel dup'd it into SCM_RIGHTS). */
+int ww_bridge_send_release_syncobj(int sock, int release_syncobj_fd);
 
 /* Emit an `Error` event with a text message. */
 int ww_bridge_send_error(int sock, const char *msg);

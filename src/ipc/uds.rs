@@ -2,7 +2,9 @@
 //!
 //! Wire frame (same as `waywallen-display-v1`):
 //!
-//!     [u16 LE opcode][u16 LE total_length][body...]
+//! ```text
+//! [u16 LE opcode][u16 LE total_length][body...]
+//! ```
 //!
 //! where `total_length` includes the 4-byte header. Ancillary file
 //! descriptors ride along as SCM_RIGHTS on the same `sendmsg(2)` /
@@ -372,6 +374,7 @@ mod tests {
                 image_index: 0,
                 seq: 1,
                 ts_ns: 0,
+                release_point: 0,
             },
             &[],
         )

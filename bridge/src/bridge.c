@@ -313,6 +313,14 @@ int ww_bridge_send_frame_ready(int sock,
                   m, &sync_fd, 1);
 }
 
+int ww_bridge_send_release_syncobj(int sock, int release_syncobj_fd) {
+    if (release_syncobj_fd < 0) return -EINVAL;
+    ww_evt_release_syncobj_t m;
+    memset(&m, 0, sizeof(m));
+    WW_SEND_EVENT(sock, WW_EVT_RELEASE_SYNCOBJ,
+                  ww_evt_release_syncobj_encode, &m, &release_syncobj_fd, 1);
+}
+
 int ww_bridge_send_error(int sock, const char *msg) {
     if (!msg) return -EINVAL;
     ww_evt_error_t m;

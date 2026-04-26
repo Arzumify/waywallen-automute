@@ -109,6 +109,12 @@ struct HostState {
     size_t                rgba_size { 0 };
     uint64_t              bind_generation { 0 };
     uint64_t              next_seq { 1 };
+    // Monotonic counter for `frame_ready.release_point`. Each new
+    // submit waits on `last_release_point` (the previous frame's
+    // point — daemon will have transferred consumer release fences
+    // onto it once they signal) and publishes a fresh point. Starts
+    // at 0 so the very first submit skips the wait.
+    uint64_t              last_release_point { 0 };
 };
 
 void signal_shutdown(HostState& s) {
@@ -149,10 +155,16 @@ static bool emit_bind_and_frame_locked(HostState& s, int sync_fd) {
         return false;
     }
 
+    // Advance the release timeline: this submit's release fence will
+    // arrive on the daemon side as `release_timeline_sem_ @ next_point`
+    // once every consumer signals their per-frame syncobj.
+    const uint64_t next_release_point = s.last_release_point + 1;
+
     ww_evt_frame_ready_t fr {};
-    fr.image_index = 0;
-    fr.seq         = s.next_seq++;
-    fr.ts_ns       = now_ns();
+    fr.image_index   = 0;
+    fr.seq           = s.next_seq++;
+    fr.ts_ns         = now_ns();
+    fr.release_point = next_release_point;
     int rc = ww_bridge_send_frame_ready(s.sock, &fr, sync_fd);
     ::close(sync_fd);
     if (rc != 0) {
@@ -161,6 +173,7 @@ static bool emit_bind_and_frame_locked(HostState& s, int sync_fd) {
                      rc);
         return false;
     }
+    s.last_release_point = next_release_point;
     return true;
 }
 
@@ -188,7 +201,7 @@ static void apply_configure(HostState& s, uint32_t flags) {
         // daemon's pending_configure clears.
         std::string uerr;
         int sync_fd = s.producer->upload_and_submit(
-            s.rgba_data, s.rgba_size, &uerr);
+            s.rgba_data, s.rgba_size, s.last_release_point, &uerr);
         if (sync_fd < 0) {
             std::fprintf(stderr,
                          "waywallen-image-renderer: re-upload failed: %s\n",
@@ -207,9 +220,13 @@ static void apply_configure(HostState& s, uint32_t flags) {
         signal_shutdown(s);
         return;
     }
+    // Rebuild created a fresh image (different memory), so the prior
+    // release_point no longer corresponds to anyone holding the new
+    // dma-buf. Reset and skip the wait on this submit.
+    s.last_release_point = 0;
     std::string uerr;
     int sync_fd = s.producer->upload_and_submit(
-        s.rgba_data, s.rgba_size, &uerr);
+        s.rgba_data, s.rgba_size, /*wait_release_point=*/0, &uerr);
     if (sync_fd < 0) {
         std::fprintf(stderr,
                      "waywallen-image-renderer: post-rebuild upload failed: %s\n",
@@ -349,7 +366,8 @@ int main(int argc, char** argv) {
         }
         std::string uerr;
         int sync_fd = prod->upload_and_submit(
-            buf.data.data(), buf.data.size(), &uerr);
+            buf.data.data(), buf.data.size(),
+            /*wait_release_point=*/0, &uerr);
         if (sync_fd < 0) {
             std::fprintf(stderr,
                          "waywallen-image-renderer: upload: %s\n",
@@ -408,13 +426,33 @@ int main(int argc, char** argv) {
                  opt.width, opt.height, drm_major, drm_minor);
 
     if (producer) {
+        // Export the producer's release timeline syncobj and ship it
+        // to the daemon BEFORE any frame_ready. The daemon imports it
+        // via DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE on its own render node and
+        // transfers consumer release fences onto each frame_ready's
+        // release_point. Required by ipc_v1: every frame_ready carries
+        // a release_point that names a value on this exact syncobj.
+        std::string rerr;
+        int release_fd = producer->export_release_syncobj_fd(&rerr);
+        if (release_fd < 0)
+            die("export release_syncobj fd: " + rerr);
+        if (int rc = ww_bridge_send_release_syncobj(host.sock, release_fd);
+            rc != 0) {
+            ::close(release_fd);
+            die("send release_syncobj failed: " + std::to_string(rc));
+        }
+        ::close(release_fd);
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: sent release_syncobj\n");
+
         host.producer    = producer.get();
         host.rgba_data   = rgba_buf.data.data();
         host.rgba_size   = rgba_buf.data.size();
 
         std::string uerr;
         int sync_fd = producer->upload_and_submit(
-            rgba_buf.data.data(), rgba_buf.data.size(), &uerr);
+            rgba_buf.data.data(), rgba_buf.data.size(),
+            /*wait_release_point=*/0, &uerr);
         if (sync_fd < 0) die("upload: " + uerr);
 
         std::lock_guard<std::mutex> lock(host.send_mu);

@@ -11,7 +11,9 @@
 //! handling on top of the generated codec. The wire format mirrors
 //! `waywallen-display-v1`:
 //!
-//!     [u16 LE opcode][u16 LE total_length][body...]
+//! ```text
+//! [u16 LE opcode][u16 LE total_length][body...]
+//! ```
 
 #[allow(dead_code, clippy::all)]
 pub mod generated {

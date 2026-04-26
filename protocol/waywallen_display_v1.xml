@@ -45,17 +45,24 @@
     - Between receipt of `bind_buffers` and the corresponding
       `set_config`, the display is in PENDING_CONFIG and MUST NOT accept
       any `frame_ready`.
-    - `frame_ready` and `buffer_release` are strictly 1:1, matched by
-      (buffer_generation, buffer_index, seq).
-    - Every `frame_ready` MUST carry exactly one acquire sync_fd. v1
-      requires explicit sync; there is no fallback to implicit dma-fence.
+    - Every `frame_ready` carries exactly TWO fds (in order):
+        1. acquire sync_fd     — dma_fence sync_file the display MUST
+           wait on before sampling.
+        2. release_syncobj fd  — daemon-allocated drm_syncobj (binary).
+           The display signals it (via SYNC_FILE → IMPORT_SYNC_FILE, or
+           by signaling the imported Vulkan binary semaphore from its
+           own GPU work) once it has finished sampling. The signal IS
+           the release — there is no separate `buffer_release` request
+           in v1.
+        The display owns both fds and MUST close them after import.
     - Display never panics/aborts; any wire or protocol error results
       in on_disconnected and cleanup. Server is free to crash.
 
   Version: 1
-  Required features (must appear in welcome.features): "explicit_sync_fd"
-  Optional features (reserved): "async_release", "drm_syncobj",
-                                "color_management", "hdr"
+  Required features (must appear in welcome.features):
+    "explicit_sync_fd"   — acquire fence carried as dma_fence sync_file.
+    "drm_syncobj_release" — release fence carried as drm_syncobj fd.
+  Optional features (reserved): "color_management", "hdr"
 -->
 <protocol name="waywallen_display" version="1">
 
@@ -120,23 +127,14 @@
   </request>
 
   <!--
-    Return a frame slot to the producer so the buffer can be reused.
-    MUST be sent exactly once for every `frame_ready` the display has
-    received (while the frame's generation is still current).
-
-    v1: no fd attached. Caller MUST have completed its GPU reads before
-        sending this message (synchronous release).
-    v2: when the `async_release` feature is negotiated, this request
-        carries one release sync_fd indicating "my GPU is done reading";
-        producer waits on it before overwriting the buffer.
+    NOTE: opcode 4 is intentionally unused. v1's `buffer_release`
+    request was removed; release is now signaled by the display
+    flipping the `release_syncobj` fd that arrived alongside the
+    matching `frame_ready` (see opcode 5). Releasing a slot is
+    fire-and-forget on the GPU side: the daemon polls the syncobj
+    and only then merges the fence into the producer's release
+    timeline.
   -->
-  <request name="buffer_release" opcode="4">
-    <arg name="buffer_generation" type="u64"/>
-    <arg name="buffer_index" type="u32"/>
-    <arg name="seq" type="u64"/>
-    <!-- v1 fds = 0; v2 async_release fds = 1 -->
-    <fds count="0"/>
-  </request>
 
   <!--
     Clean shutdown marker from the display side. After sending `bye`
@@ -247,14 +245,22 @@
   <!--
     Producer has a new frame available in `buffer_index` of the
     current buffer_generation. The display MUST wait on the attached
-    `acquire sync_fd` before sampling the texture, then (after its
-    own GPU work completes) send exactly one `buffer_release` for
-    this (buffer_generation, buffer_index, seq).
+    `acquire sync_fd` before sampling the texture, and signal the
+    attached `release_syncobj` fd from its release GPU work — the
+    signal is the release; v1 has no `buffer_release` request.
 
-    The acquire fd is a dma_fence sync_file handle (as produced by
-    `vkGetSemaphoreFdKHR` with VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD
-    or by `eglDupNativeFenceFDANDROID`). It is owned by the receiver
-    and must be closed after import.
+    Two fds are attached, in order:
+
+      [0] acquire sync_fd  — dma_fence sync_file (as produced by
+          `vkGetSemaphoreFdKHR(SYNC_FD)` or `eglDupNativeFenceFDANDROID`).
+          Single-use; the display imports it (TEMPORARY) and closes
+          the fd.
+
+      [1] release_syncobj fd  — daemon-allocated drm_syncobj (binary,
+          unsignaled). Import via `vkImportSemaphoreFdKHR(OPAQUE_FD)`
+          and signal it from the GPU submit that consumes the buffer,
+          OR signal directly via `DRM_IOCTL_SYNCOBJ_IMPORT_SYNC_FILE`
+          using the sync_file produced by your release work.
 
     `seq` is globally monotonic per connection; it does not reset
     across `bind_buffers` rebinds.
@@ -263,7 +269,7 @@
     <arg name="buffer_generation" type="u64"/>
     <arg name="buffer_index" type="u32"/>
     <arg name="seq" type="u64"/>
-    <fds count="1"/>
+    <fds count="2"/>
   </event>
 
   <!--

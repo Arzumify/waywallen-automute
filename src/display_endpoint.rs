@@ -12,12 +12,14 @@ use crate::display_proto::{codec, opcode, Event, Request, PROTOCOL_NAME};
 use crate::renderer_manager::{BindSnapshot, RendererHandle};
 use crate::routing::{DisplayHandle, DisplayOutEvent, DisplayRegistration, Router};
 use crate::scheduler::ProjectedConfig;
+use crate::sync::{drm_device, FrameRecord};
 
 /// Server version string advertised in `welcome.server_version`.
 pub const SERVER_VERSION: &str = concat!("waywallen ", env!("CARGO_PKG_VERSION"));
 
-/// v1 mandatory feature flags.
-const MANDATORY_FEATURES: &[&str] = &["explicit_sync_fd"];
+/// v1 mandatory feature flags. Consumers verify these are present in
+/// `welcome.features` and disconnect if not.
+const MANDATORY_FEATURES: &[&str] = &["explicit_sync_fd", "drm_syncobj_release"];
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -259,17 +261,19 @@ async fn run_frame_loop(
                         break Err(e);
                     }
                 }
-                Some(DisplayOutEvent::Frame { renderer, buffer_generation, buffer_index, seq }) => {
+                Some(DisplayOutEvent::Frame {
+                    renderer, buffer_generation, buffer_index, seq,
+                    release_point, expected_count,
+                }) => {
                     if let Err(e) = forward_frame_ready(
                         &stream, &renderer, buffer_generation, buffer_index, seq,
+                        release_point, expected_count,
                     ).await {
                         break Err(e);
                     }
                 }
             },
             maybe_req = req_rx.recv() => match maybe_req {
-                Some(Ok(Request::BufferRelease { buffer_generation: g, buffer_index, seq })) => {
-                }
                 Some(Ok(Request::UpdateDisplay { width, height, properties: _ })) => {
                     router.update_display_size(display_id, width, height).await;
                     log::info!("display {display_id}: resized to {width}x{height}");
@@ -484,9 +488,27 @@ async fn forward_frame_ready(
     buffer_generation: u64,
     buffer_index: u32,
     seq: u64,
+    release_point: u64,
+    expected_count: u32,
 ) -> Result<()> {
     let fence = acquire_sync_fd(renderer, seq)?;
+    // Allocate a fresh BINARY drm_syncobj for this consumer and frame.
+    // The HANDLE stays in the daemon (handed off to the reaper) so it
+    // can WAIT on the consumer's eventual signal and TRANSFER the
+    // resulting fence onto the producer's release timeline at
+    // `release_point`. The exported FD goes to the consumer; the
+    // kernel refcounts the syncobj so the daemon-side handle and
+    // consumer-side fd are independent.
+    let dev = drm_device().context("open DRM render node for release_syncobj")?;
+    let consumer_handle = dev
+        .create_binary_syncobj()
+        .context("create binary release_syncobj")?;
+    let release_fd = dev
+        .handle_to_fd(&consumer_handle)
+        .context("export release_syncobj fd")?;
+
     let fence_raw = fence.as_raw_fd();
+    let release_raw = release_fd.as_raw_fd();
     let send_stream = stream.try_clone().context("clone for frame_ready")?;
     let evt = Event::FrameReady {
         buffer_generation,
@@ -494,12 +516,29 @@ async fn forward_frame_ready(
         seq,
     };
     let send_result = tokio::task::spawn_blocking(move || {
-        codec::send_event(&send_stream, &evt, &[fence_raw])
+        codec::send_event(&send_stream, &evt, &[fence_raw, release_raw])
     })
     .await
     .context("frame_ready send join")?;
     drop(fence);
+    drop(release_fd);
     send_result.map_err(|e| anyhow!("send frame_ready: {e}"))?;
+
+    // Hand off to the renderer's reaper. If the channel is closed
+    // (renderer evicted) the syncobj is destroyed by the dropped
+    // handle and the producer's release_syncobj timeline simply
+    // never advances at this point — which is fine, the renderer is
+    // gone anyway.
+    if let Err(e) = renderer.submit_frame_record(FrameRecord {
+        release_point,
+        consumer_handle,
+        expected_count,
+    }) {
+        log::warn!(
+            "renderer {}: failed to enqueue FrameRecord (point {release_point}): {e}",
+            renderer.id
+        );
+    }
     Ok(())
 }
 

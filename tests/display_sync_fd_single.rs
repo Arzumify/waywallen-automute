@@ -176,12 +176,14 @@ async fn renderer_produces_real_sync_fds() {
                         "frame_ready gen={g} != bind gen={buffer_generation}"
                     );
                     anyhow::ensure!(
-                        fds.len() == 1,
-                        "frame_ready expected 1 sync fd, got {}",
+                        fds.len() == 2,
+                        "frame_ready expected 2 fds (acquire + release_syncobj), got {}",
                         fds.len()
                     );
-                    let fd = &fds[0];
-                    anyhow::ensure!(fd.as_raw_fd() >= 0, "invalid sync fd");
+                    let acquire_fd = &fds[0];
+                    let release_fd = &fds[1];
+                    anyhow::ensure!(acquire_fd.as_raw_fd() >= 0, "invalid acquire fd");
+                    anyhow::ensure!(release_fd.as_raw_fd() >= 0, "invalid release fd");
 
                     // Distinguish a real dma_fence sync_file from our
                     // eventfd placeholder. The f_op of a sync_file is
@@ -190,7 +192,7 @@ async fn renderer_produces_real_sync_fds() {
                     // readlink is "anon_inode:[eventfd]".
                     let link = std::fs::read_link(format!(
                         "/proc/self/fd/{}",
-                        fd.as_raw_fd()
+                        acquire_fd.as_raw_fd()
                     ))
                     .unwrap_or_default();
                     let link_str = link.to_string_lossy();
@@ -198,20 +200,18 @@ async fn renderer_produces_real_sync_fds() {
                         real_fence_count += 1;
                     }
                     eprintln!(
-                        "frame #{frames_seen} idx={buffer_index} seq={seq} fd={} kind={link_str}",
-                        fd.as_raw_fd()
+                        "frame #{frames_seen} idx={buffer_index} seq={seq} \
+                         acquire_fd={} kind={link_str} release_fd={}",
+                        acquire_fd.as_raw_fd(),
+                        release_fd.as_raw_fd()
                     );
 
-                    // Release the buffer so the renderer can reuse it.
-                    codec::send_request(
-                        &stream,
-                        &Request::BufferRelease {
-                            buffer_generation: g,
-                            buffer_index,
-                            seq,
-                        },
-                        &[],
-                    )?;
+                    // Release path: v1 dropped the BufferRelease request.
+                    // The release_syncobj is signaled by the consumer's
+                    // GPU work; here we just drop the fds (closes them)
+                    // since the test is only verifying acquire-fd plumbing.
+                    drop(fds);
+                    let _ = (g, buffer_index, seq);
                     frames_seen += 1;
                 }
                 Event::BindBuffers {

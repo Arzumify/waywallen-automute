@@ -732,6 +732,7 @@ int ww_evt_frame_ready_encode(const ww_evt_frame_ready_t *m, ww_buf_t *out) {
     if ((rc = w_u32(out, m->image_index))) return rc;
     if ((rc = w_u64(out, m->seq))) return rc;
     if ((rc = w_u64(out, m->ts_ns))) return rc;
+    if ((rc = w_u64(out, m->release_point))) return rc;
     return WW_OK;
 }
 
@@ -742,6 +743,7 @@ int ww_evt_frame_ready_decode(const uint8_t *buf, size_t len, ww_evt_frame_ready
     if ((rc = rd_u32(&r, &out->image_index))) goto fail;
     if ((rc = rd_u64(&r, &out->seq))) goto fail;
     if ((rc = rd_u64(&r, &out->ts_ns))) goto fail;
+    if ((rc = rd_u64(&r, &out->release_point))) goto fail;
     if (r.pos != r.len) {
         int rc2 = WW_ERR_TRAILING;
         (void)rc2;
@@ -794,5 +796,30 @@ void ww_evt_error_free(ww_evt_error_t *m) {
 uint32_t ww_evt_error_expected_fds(const ww_evt_error_t *m) {
     (void)m;
     return 0;
+}
+
+int ww_evt_release_syncobj_encode(const ww_evt_release_syncobj_t *m, ww_buf_t *out) {
+    (void)m; (void)out;
+    return WW_OK;
+}
+
+int ww_evt_release_syncobj_decode(const uint8_t *buf, size_t len, ww_evt_release_syncobj_t *out) {
+    memset(out, 0, sizeof(*out));
+    ww_rd_t r = { buf, 0, len };
+    (void)r;
+    if (r.pos != r.len) {
+        /* empty message; no allocations to release */
+        return WW_ERR_TRAILING;
+    }
+    return WW_OK;
+}
+
+void ww_evt_release_syncobj_free(ww_evt_release_syncobj_t *m) {
+    (void)m;
+}
+
+uint32_t ww_evt_release_syncobj_expected_fds(const ww_evt_release_syncobj_t *m) {
+    (void)m;
+    return 1;
 }
 

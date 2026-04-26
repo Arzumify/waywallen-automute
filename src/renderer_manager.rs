@@ -161,6 +161,24 @@ pub struct RendererHandle {
     /// dup-on-take API.
     sync_fds: Arc<StdMutex<std::collections::VecDeque<(u64, OwnedFd)>>>,
 
+    /// Producer-exported timeline drm_syncobj used as the release
+    /// fence target. Populated by exactly one `ReleaseSyncobj` event
+    /// the renderer subprocess emits between `Ready` and the first
+    /// `FrameReady`. The fd is the OPAQUE_FD export of a Vulkan
+    /// TIMELINE semaphore on the renderer's `VkDevice` (= a
+    /// drm_syncobj on Mesa drivers); the reaper imports it via
+    /// `DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE` and `TRANSFER`s consumer
+    /// release fences onto each frame's `release_point`.
+    release_syncobj: Arc<StdMutex<Option<OwnedFd>>>,
+
+    /// Sink for per-frame [`crate::sync::FrameRecord`]s. The display
+    /// endpoint pushes one record per consumer per frame; the reaper
+    /// task (spawned alongside this handle) drains them, waits for
+    /// the consumer signal, and transfers the resulting fence onto
+    /// the producer's release timeline. `Option` so test stubs can
+    /// skip wiring the channel.
+    frame_record_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::sync::FrameRecord>>,
+
     /// The child process. Kept alive so dropping the manager reaps it.
     child: Arc<TokioMutex<Option<Child>>>,
 }
@@ -214,6 +232,36 @@ impl RendererHandle {
         let dup_raw = nix::unistd::dup(fd.as_raw_fd()).ok()?;
         // SAFETY: nix::unistd::dup returned a fresh fd we now own.
         Some(unsafe { OwnedFd::from_raw_fd(dup_raw) })
+    }
+
+    /// Borrow a dup'd handle to the producer's release timeline
+    /// syncobj fd. Returns `None` until the `ReleaseSyncobj` event has
+    /// arrived. The reaper uses this once per renderer (after import
+    /// to a drm_syncobj handle the result is cached on the daemon
+    /// side).
+    pub fn clone_release_syncobj_fd(&self) -> Option<OwnedFd> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let guard = self.release_syncobj.lock().ok()?;
+        let fd = guard.as_ref()?;
+        let dup_raw = nix::unistd::dup(fd.as_raw_fd()).ok()?;
+        Some(unsafe { OwnedFd::from_raw_fd(dup_raw) })
+    }
+
+    /// Push a per-frame [`crate::sync::FrameRecord`] to the reaper.
+    /// The display endpoint calls this once per consumer per frame,
+    /// after creating the consumer's binary release_syncobj. Returns
+    /// `Err` if no reaper is wired (test_stub) or the channel was
+    /// already closed (renderer evicted) — in either case the caller
+    /// should drop the SyncobjHandle (which destroys the kernel
+    /// object) and skip the frame.
+    pub fn submit_frame_record(
+        &self,
+        record: crate::sync::FrameRecord,
+    ) -> std::result::Result<(), &'static str> {
+        let Some(tx) = self.frame_record_tx.as_ref() else {
+            return Err("no reaper wired (test stub or unconfigured renderer)");
+        };
+        tx.send(record).map_err(|_| "reaper channel closed")
     }
 }
 
@@ -421,6 +469,8 @@ impl RendererManager {
             Arc::new(StdMutex::new(None));
         let sync_fds: Arc<StdMutex<std::collections::VecDeque<(u64, OwnedFd)>>> =
             Arc::new(StdMutex::new(std::collections::VecDeque::new()));
+        let release_syncobj: Arc<StdMutex<Option<OwnedFd>>> =
+            Arc::new(StdMutex::new(None));
         let pending_configure: Arc<StdMutex<Option<u32>>> = Arc::new(StdMutex::new(None));
 
         let sock = Arc::new(StdMutex::new(std_stream));
@@ -428,6 +478,7 @@ impl RendererManager {
         let reader_events = events_tx.clone();
         let reader_snapshot = bind_snapshot.clone();
         let reader_sync_fds = sync_fds.clone();
+        let reader_release_syncobj = release_syncobj.clone();
         let reader_pending = pending_configure.clone();
         let reader_id = id.clone();
         let reader_reap_tx = self.reap_tx.clone();
@@ -438,10 +489,31 @@ impl RendererManager {
                 reader_events,
                 reader_snapshot,
                 reader_sync_fds,
+                reader_release_syncobj,
                 reader_pending,
                 reader_reap_tx,
             );
         });
+
+        // Per-renderer reaper: drains FrameRecords, waits on consumer
+        // signals, transfers fences onto the producer's release
+        // timeline. Channel sender lives on the handle; receiver is
+        // moved into the spawned task. Dropping the handle (renderer
+        // evicted) closes the channel and the reaper exits cleanly.
+        // We don't fail spawn if the DRM device can't open — the
+        // renderer is still useful for acquire-only flows; the reaper
+        // just won't run.
+        let (frame_tx, frame_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::sync::FrameRecord>();
+        let frame_record_tx = match crate::sync::drm_device() {
+            Ok(_) => Some(frame_tx),
+            Err(e) => {
+                log::warn!(
+                    "renderer {id}: no DRM render node ({e}); release-syncobj reaper disabled"
+                );
+                None
+            }
+        };
 
         let handle = Arc::new(RendererHandle {
             id: id.clone(),
@@ -457,9 +529,18 @@ impl RendererManager {
             events: events_tx,
             bind_snapshot,
             sync_fds,
+            release_syncobj,
+            frame_record_tx,
             pending_configure,
             child: Arc::new(TokioMutex::new(Some(child))),
         });
+
+        if handle.frame_record_tx.is_some() {
+            // SAFETY: drm_device() returned Ok above; it caches the
+            // device and is idempotent.
+            let drm = crate::sync::drm_device().expect("checked above");
+            crate::sync::spawn_reaper(drm, handle.clone(), frame_rx);
+        }
 
         {
             let mut inner = self.inner.lock().await;
@@ -632,6 +713,7 @@ fn run_reader(
     events: broadcast::Sender<EventMsg>,
     bind_snapshot: Arc<StdMutex<Option<BindSnapshot>>>,
     sync_fds: Arc<StdMutex<std::collections::VecDeque<(u64, OwnedFd)>>>,
+    release_syncobj: Arc<StdMutex<Option<OwnedFd>>>,
     pending_configure: Arc<StdMutex<Option<u32>>>,
     reap_tx: tokio::sync::mpsc::UnboundedSender<RendererId>,
 ) {
@@ -760,6 +842,21 @@ fn run_reader(
                 }
                 guard.push_back((seq, fd));
             }
+        } else if let EventMsg::ReleaseSyncobj = msg {
+            // Producer's exported timeline drm_syncobj. Exactly one fd;
+            // the codec enforced expected_fds() == 1.
+            let mut taken = fds;
+            let fd = taken.remove(0);
+            if let Ok(mut guard) = release_syncobj.lock() {
+                if guard.is_some() {
+                    log::warn!(
+                        "renderer {id}: ReleaseSyncobj received twice; \
+                         replacing previous fd"
+                    );
+                }
+                *guard = Some(fd);
+                log::info!("renderer {id}: ReleaseSyncobj imported");
+            }
         } else if !fds.is_empty() {
             log::warn!(
                 "renderer {id}: unexpected fds on event {msg:?}, dropping"
@@ -849,6 +946,8 @@ impl RendererHandle {
             events: events_tx,
             bind_snapshot: Arc::new(StdMutex::new(None)),
             sync_fds: Arc::new(StdMutex::new(std::collections::VecDeque::new())),
+            release_syncobj: Arc::new(StdMutex::new(None)),
+            frame_record_tx: None,
             pending_configure: Arc::new(StdMutex::new(None)),
             child: Arc::new(TokioMutex::new(None)),
         })

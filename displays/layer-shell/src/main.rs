@@ -1,6 +1,6 @@
 //! waywallen-display-layer-shell — Wayland layer-shell wallpaper client.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -146,6 +146,14 @@ struct OutputBinding {
     /// compositor vblank) — `BufferRelease` is always sent so the
     /// daemon keeps producing.
     frame_pending: AtomicBool,
+    /// Per-buffer-index FIFO of release_syncobj fds we've received
+    /// from the daemon and not yet signaled. Worker pushes on each
+    /// `frame_ready`; the main thread pops + SIGNALs in the
+    /// `WlBuffer::Release` Dispatch handler. Indexed by `buffer_index`
+    /// so a fan-out renderer (mpv/wescene) signals the right fence
+    /// when the compositor releases a specific slot. Vec is grown to
+    /// `count` when `bind_buffers` arrives.
+    pending_release_fds: Mutex<Vec<VecDeque<OwnedFd>>>,
 }
 
 /// One logical output — wl_output plus the layer_surface/UDS worker
@@ -352,17 +360,57 @@ impl Dispatch<WlSurface, u32> for App {
     }
 }
 
-impl Dispatch<WlBuffer, ()> for App {
+impl Dispatch<WlBuffer, (u32, u32)> for App {
     fn event(
-        _state: &mut Self,
+        state: &mut Self,
         buffer: &WlBuffer,
         event: wayland_client::protocol::wl_buffer::Event,
-        _data: &(),
+        data: &(u32, u32),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+        let (output_name, buffer_index) = *data;
         if let wayland_client::protocol::wl_buffer::Event::Release = event {
-            log::trace!("wl_buffer {} released", buffer.id());
+            log::trace!(
+                "wl_buffer {} (out={output_name} idx={buffer_index}) released",
+                buffer.id()
+            );
+            // Pop the next pending release_syncobj fd for this slot
+            // and SIGNAL it. The daemon's reaper is waiting on this
+            // fd; once signaled, it TRANSFERs the fence onto the
+            // producer's release timeline so the producer can reuse
+            // the buffer for its next submit.
+            let Some(binding) = state
+                .outputs
+                .get(&output_name)
+                .and_then(|e| e.binding.as_ref())
+            else {
+                return;
+            };
+            let fd = {
+                let mut guard = binding.pending_release_fds.lock().unwrap();
+                guard
+                    .get_mut(buffer_index as usize)
+                    .and_then(|q| q.pop_front())
+            };
+            if let Some(fd) = fd {
+                if let Err(e) = signal_release_syncobj(fd) {
+                    log::warn!(
+                        "[{}] signal release_syncobj on Release(idx={buffer_index}) failed: {e}",
+                        binding.display_name
+                    );
+                }
+            } else {
+                // Either we received Release before any frame_ready
+                // (unlikely but legal — daemon may bind without
+                // immediately producing) or our fd queue ran dry
+                // because the daemon stopped producing. Either way
+                // there's nothing to signal.
+                log::trace!(
+                    "[{}] Release(idx={buffer_index}) with empty pending fd queue",
+                    binding.display_name
+                );
+            }
         }
     }
 }
@@ -480,6 +528,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, u32> for App {
                         closed: AtomicBool::new(false),
                         stream: RwLock::new(None),
                         frame_pending: AtomicBool::new(false),
+                        pending_release_fds: Mutex::new(Vec::new()),
                     })
                 });
                 // `width` / `height` from `configure` are in *logical*
@@ -701,7 +750,7 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
     let mut transform_dirty: bool = true;
 
     loop {
-        let (evt, fds) = codec::recv_event(&stream).map_err(|e| anyhow!("recv event: {e}"))?;
+        let (evt, mut fds) = codec::recv_event(&stream).map_err(|e| anyhow!("recv event: {e}"))?;
         match evt {
             ProtoEvent::BindBuffers {
                 buffer_generation,
@@ -748,6 +797,19 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
                 gen = Some(buffer_generation);
                 buf_width = bw;
                 buf_height = bh;
+                // Reset the per-slot release_syncobj fd queues. Any
+                // pending fds from a prior generation belong to retired
+                // wl_buffers the compositor will never Release; drop
+                // them now (kernel DESTROY) so we don't keep them
+                // around forever. The producer's release timeline is
+                // also a per-renderer object, so dropped points are
+                // benign — its next submit waits on the new
+                // generation's points only.
+                {
+                    let mut g = binding.pending_release_fds.lock().unwrap();
+                    g.clear();
+                    g.resize_with(count as usize, VecDeque::new);
+                }
                 log::info!(
                     "[{}] imported {} wl_buffers for generation {} ({}x{} fourcc=0x{:08x})",
                     binding.display_name,
@@ -787,6 +849,44 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
                 buffer_index,
                 seq,
             } => {
+                // fds = [acquire_sync_fd, release_syncobj_fd]
+                //   - acquire fence: dropped here (close); the compositor's
+                //     own zwp_linux_drm_syncobj integration handles real
+                //     acquire sync (or it's implicit via dma-fence on
+                //     the buffer).
+                //   - release syncobj: queued under `buffer_index`. The
+                //     `WlBuffer::Release` Dispatch handler will pop +
+                //     SIGNAL when the compositor reports it's done
+                //     reading. This is the correct semantic point — the
+                //     producer's reuse of this slot now waits on
+                //     "compositor finished" rather than the racy
+                //     "client received frame_ready".
+                if fds.len() == 2 {
+                    let release_fd = fds.remove(1);
+                    let mut q = binding.pending_release_fds.lock().unwrap();
+                    if let Some(slot) = q.get_mut(buffer_index as usize) {
+                        slot.push_back(release_fd);
+                    } else {
+                        // Buffer index out of range for current
+                        // generation — daemon protocol bug or rebind
+                        // race. Signal immediately so the reaper
+                        // doesn't deadlock waiting on a syncobj that
+                        // will never fire.
+                        log::warn!(
+                            "[{}] frame_ready idx={buffer_index} out of range \
+                             ({}); signaling release_syncobj eagerly",
+                            binding.display_name,
+                            q.len(),
+                        );
+                        drop(q);
+                        if let Err(e) = signal_release_syncobj(release_fd) {
+                            log::warn!(
+                                "[{}] eager signal release_syncobj failed: {e}",
+                                binding.display_name
+                            );
+                        }
+                    }
+                }
                 drop(fds);
 
                 if Some(g) != gen {
@@ -881,16 +981,13 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
                     );
                 }
 
-                codec::send_request(
-                    &stream,
-                    &ProtoRequest::BufferRelease {
-                        buffer_generation: g,
-                        buffer_index,
-                        seq,
-                    },
-                    &[],
-                )
-                .map_err(|e| anyhow!("send buffer_release: {e}"))?;
+                // TODO(release-syncobj): import the release_syncobj fd
+                // from `fds[1]` as a drm_syncobj, hook into wl_buffer.release
+                // for this slot, and signal the syncobj from there. v1
+                // dropped the BufferRelease request — the syncobj signal
+                // IS the release. For now both fds are dropped above and
+                // the daemon's placeholder reaper does not block on them.
+                let _ = (g, buffer_index, seq);
             }
             ProtoEvent::Unbind { buffer_generation: g } => {
                 if Some(g) == gen {
@@ -970,7 +1067,10 @@ fn import_dmabufs(
             fourcc,
             zwp_linux_buffer_params_v1::Flags::empty(),
             &qh,
-            (),
+            // (output_name, buffer_index) — Dispatch::<WlBuffer> uses
+            // these to route the Release event back to the right
+            // binding's pending_release_fds queue.
+            (binding.output_name, b as u32),
         );
         buffers.push(buffer);
     }
@@ -1098,4 +1198,24 @@ fn main() -> Result<()> {
             return Err(e.into());
         }
     }
+}
+
+/// Import the daemon-allocated binary release_syncobj fd into a handle
+/// on this process's DRM device, signal it, and drop. The signal
+/// unblocks the daemon's reaper which will then TRANSFER the fence
+/// onto the producer's release timeline.
+///
+/// `fd` is consumed (closed by `OwnedFd` drop after `fd_to_handle`
+/// imports it — kernel keeps a separate refcount per handle and per
+/// fd, so the import is independent of the close).
+fn signal_release_syncobj(fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {
+    use waywallen::sync::drm_device;
+    let dev = drm_device().context("open DRM render node")?;
+    let handle = dev
+        .fd_to_handle(&fd)
+        .context("DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE")?;
+    dev.signal(&handle).context("DRM_IOCTL_SYNCOBJ_SIGNAL")?;
+    drop(handle); // DESTROY on this process's side; consumer fd already closed via `fd` drop below
+    drop(fd);
+    Ok(())
 }

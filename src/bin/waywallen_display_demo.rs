@@ -269,31 +269,26 @@ fn run_session(sock_path: &Path, args: &Args) -> Result<()> {
                     drop(fds);
                     continue;
                 }
-                if fds.len() != 1 {
+                if fds.len() != 2 {
                     return Err(anyhow!(
-                        "frame_ready expected 1 acquire sync_fd, got {}",
+                        "frame_ready expected 2 fds (acquire + release_syncobj), got {}",
                         fds.len()
                     ));
                 }
-                // Drop the fd — Phase 1 demo does not import it. The
-                // OwnedFd destructor closes it.
+                // Drop both fds — Phase 1 demo does not import the acquire
+                // fence and does not signal the release_syncobj. The
+                // OwnedFd destructors close them. The daemon's reaper
+                // (when wired up) will time out / observe the close and
+                // surface a warning.
                 drop(fds);
 
                 frames_seen += 1;
                 log::info!(
                     "display {display_id}: frame {frames_seen} ready (idx={buffer_index} seq={seq})"
                 );
-
-                codec::send_request(
-                    &stream,
-                    &Request::BufferRelease {
-                        buffer_generation: g,
-                        buffer_index,
-                        seq,
-                    },
-                    &[],
-                )
-                .map_err(|e| anyhow!("send buffer_release: {e}"))?;
+                let _ = g;
+                // BufferRelease request was removed in v1; release is the
+                // syncobj signal. See TODO above.
 
                 if let Some(max) = args.max_frames {
                     if frames_seen >= max {

@@ -3,7 +3,9 @@
 //!
 //! Wire frame:
 //!
-//!     [u16 LE opcode][u16 LE total_length][body...]
+//! ```text
+//! [u16 LE opcode][u16 LE total_length][body...]
+//! ```
 //!
 //! where `total_length` includes the 4-byte header. Ancillary file
 //! descriptors ride along as SCM_RIGHTS on the same `sendmsg(2)` /
@@ -359,8 +361,9 @@ mod tests {
     #[test]
     fn event_frame_ready_with_fd() {
         let (a, b) = pair();
-        let fd = make_memfd();
-        let raw = fd.as_raw_fd();
+        let acquire = make_memfd();
+        let release = make_memfd();
+        let raws = [acquire.as_raw_fd(), release.as_raw_fd()];
 
         send_event(
             &a,
@@ -369,10 +372,10 @@ mod tests {
                 buffer_index: 0,
                 seq: 42,
             },
-            &[raw],
+            &raws,
         )
         .unwrap();
-        drop(fd);
+        drop((acquire, release));
 
         let (got, fds) = recv_event(&b).unwrap();
         assert_eq!(
@@ -383,7 +386,7 @@ mod tests {
                 seq: 42
             }
         );
-        assert_eq!(fds.len(), 1);
+        assert_eq!(fds.len(), 2);
     }
 
     #[test]
@@ -401,7 +404,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            CodecError::FdCountMismatch { expected: 1, actual: 0 }
+            CodecError::FdCountMismatch { expected: 2, actual: 0 }
         ));
     }
 
@@ -423,27 +426,16 @@ mod tests {
     fn back_to_back_frames_parse_independently() {
         let (a, b) = pair();
         send_request(&a, &Request::Bye, &[]).unwrap();
-        send_request(
-            &a,
-            &Request::BufferRelease {
-                buffer_generation: 1,
-                buffer_index: 2,
-                seq: 3,
-            },
-            &[],
-        )
-        .unwrap();
+        let update = Request::UpdateDisplay {
+            width: 800,
+            height: 600,
+            properties: vec![],
+        };
+        send_request(&a, &update, &[]).unwrap();
         let (r1, _) = recv_request(&b).unwrap();
         let (r2, _) = recv_request(&b).unwrap();
         assert_eq!(r1, Request::Bye);
-        assert_eq!(
-            r2,
-            Request::BufferRelease {
-                buffer_generation: 1,
-                buffer_index: 2,
-                seq: 3
-            }
-        );
+        assert_eq!(r2, update);
     }
 
     #[test]

@@ -73,15 +73,6 @@ mod tests {
     }
 
     #[test]
-    fn request_release_roundtrip() {
-        roundtrip_req(Request::BufferRelease {
-            buffer_generation: 42,
-            buffer_index: 1,
-            seq: 12345,
-        });
-    }
-
-    #[test]
     fn request_bye_roundtrip() {
         roundtrip_req(Request::Bye);
     }
@@ -134,7 +125,8 @@ mod tests {
             buffer_index: 0,
             seq: 100,
         };
-        assert_eq!(evt.expected_fds(), 1);
+        // v1: 2 fds — acquire sync_fd + release_syncobj.
+        assert_eq!(evt.expected_fds(), 2);
         roundtrip_evt(evt);
     }
 
@@ -151,7 +143,8 @@ mod tests {
         assert_eq!(opcode::request::HELLO, 1);
         assert_eq!(opcode::request::REGISTER_DISPLAY, 2);
         assert_eq!(opcode::request::UPDATE_DISPLAY, 3);
-        assert_eq!(opcode::request::BUFFER_RELEASE, 4);
+        // opcode 4 is reserved (was BufferRelease in pre-v1; removed
+        // when release switched to the syncobj signal).
         assert_eq!(opcode::request::BYE, 5);
         assert_eq!(opcode::event::WELCOME, 1);
         assert_eq!(opcode::event::BIND_BUFFERS, 3);

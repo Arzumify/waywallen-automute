@@ -80,7 +80,7 @@ fn run_client(sock: &PathBuf, name: &str, n_frames: usize) -> anyhow::Result<usi
                 seq,
             } => {
                 anyhow::ensure!(g == buffer_generation);
-                anyhow::ensure!(fds.len() == 1);
+                anyhow::ensure!(fds.len() == 2);
                 let link = std::fs::read_link(format!(
                     "/proc/self/fd/{}",
                     fds[0].as_raw_fd()
@@ -89,15 +89,8 @@ fn run_client(sock: &PathBuf, name: &str, n_frames: usize) -> anyhow::Result<usi
                 if link.to_string_lossy().contains("sync_file") {
                     real_count += 1;
                 }
-                codec::send_request(
-                    &stream,
-                    &Request::BufferRelease {
-                        buffer_generation: g,
-                        buffer_index,
-                        seq,
-                    },
-                    &[],
-                )?;
+                drop(fds);
+                let _ = (g, buffer_index, seq);
                 frames += 1;
             }
             // Unbind/Bind/SetConfig may happen mid-stream when the

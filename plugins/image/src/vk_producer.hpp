@@ -71,7 +71,24 @@ public:
     // consumer can read it, then export a one-shot sync_file fd for the
     // signal. Caller owns the returned fd (sent via SCM_RIGHTS and then
     // closed). Returns -1 on failure and populates `*err`.
-    int upload_and_submit(const uint8_t* data, size_t size, std::string* err);
+    //
+    // `wait_release_point` is a value on the producer's release timeline
+    // syncobj (see `export_release_syncobj_fd`). Pass 0 for the first
+    // submit (no prior frame to gate on); pass the `release_point` of
+    // the previous `frame_ready` for any subsequent submit that reuses
+    // the same image slot. The submit blocks on `release_timeline_sem_
+    // @ wait_release_point` so the GPU does not overwrite the dma-buf
+    // until the daemon has transferred all consumers' release fences
+    // onto that point.
+    int upload_and_submit(const uint8_t* data, size_t size,
+                          uint64_t wait_release_point, std::string* err);
+
+    // Export the release timeline syncobj as an OPAQUE_FD. The fd is the
+    // wire-side handle the daemon imports via `DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE`
+    // and `TRANSFER`s consumer release fences onto, point-by-point.
+    // Send exactly once over IPC, after `Ready` and before any
+    // `FrameReady`. Caller owns the returned fd. Returns -1 on failure.
+    int export_release_syncobj_fd(std::string* err);
 
 private:
     VkProducer() = default;
@@ -87,6 +104,12 @@ private:
     VkCommandPool    cmd_pool_ { VK_NULL_HANDLE };
     VkCommandBuffer  cmd_ { VK_NULL_HANDLE };
     VkSemaphore      signal_sem_ { VK_NULL_HANDLE };
+    // Timeline semaphore exported as OPAQUE_FD; on Mesa drivers this
+    // round-trips through a drm_syncobj that the daemon manipulates via
+    // DRM_IOCTL_SYNCOBJ_TRANSFER. Producer-side we only WAIT on it (the
+    // daemon does the SIGNAL via TRANSFER). NVIDIA proprietary may not
+    // support this round-trip.
+    VkSemaphore      release_timeline_sem_ { VK_NULL_HANDLE };
 
     VkBuffer         staging_buf_ { VK_NULL_HANDLE };
     VkDeviceMemory   staging_mem_ { VK_NULL_HANDLE };

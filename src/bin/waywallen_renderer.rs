@@ -569,6 +569,10 @@ fn run(instance: &Instance, args: &Args) -> Result<()> {
                 image_index: slot as u32,
                 seq,
                 ts_ns,
+                // TODO(release-syncobj): once this demo grows a real
+                // release timeline, advance a per-slot point here and
+                // emit the ReleaseSyncobj export event at startup.
+                release_point: 0,
             },
             &[sync_fd],
         );

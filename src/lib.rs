@@ -10,5 +10,6 @@ pub mod probe_task;
 pub mod renderer_manager;
 pub mod routing;
 pub mod scheduler;
+pub mod sync;
 pub mod tasks;
 pub mod wallpaper_type;

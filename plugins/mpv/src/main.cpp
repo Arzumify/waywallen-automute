@@ -31,6 +31,7 @@
 #include <string>
 #include <thread>
 
+#include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -464,6 +465,21 @@ struct HostState {
     // request for flags=0 is best-effort acknowledged by re-emitting
     // bind_buffers carrying the *actual* flags=BUF_HOST_VISIBLE.
     uint32_t              flags { 1u /* BUF_HOST_VISIBLE */ };
+    // Monotonic counter for `frame_ready.release_point`. Each new
+    // submit publishes `++release_point` on the producer's release
+    // timeline; the daemon's reaper TRANSFERs consumer release fences
+    // onto that point. Producer back-pressure: before re-rendering
+    // into slot `S`, we DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT on
+    // `last_release_point[S]` so we don't overwrite a buffer the
+    // compositor is still reading.
+    uint64_t              release_point { 0 };
+    // drm_syncobj handle owning the release timeline; exported once
+    // via HANDLE_TO_FD and shipped to the daemon as a `ReleaseSyncobj`
+    // event right after `Ready`.
+    uint32_t              release_syncobj_handle { 0 };
+    // Per-slot release point assigned at last submit. 0 means "never
+    // submitted yet — no wait needed". Updated under `send_mu`.
+    uint64_t              last_release_point[SLOT_COUNT] { 0, 0, 0 };
 };
 
 // Bit set passed on the wire as `bind_buffers.flags` and on
@@ -524,6 +540,11 @@ void send_frame(HostState& s, GlCtx& gl, uint32_t slot) {
     int rc;
     {
         std::lock_guard<std::mutex> lock(s.send_mu);
+        // Bump the release timeline under the send lock so concurrent
+        // re-emits (e.g. apply_configure) can't race the counter.
+        ++s.release_point;
+        fr.release_point = s.release_point;
+        s.last_release_point[slot] = s.release_point;
         rc = ww_bridge_send_frame_ready(s.sock, &fr, sync_fd);
     }
     // SCM_RIGHTS dup'd the fd on success; close our copy either way.
@@ -535,6 +556,131 @@ void send_frame(HostState& s, GlCtx& gl, uint32_t slot) {
         s.shutdown.store(true, std::memory_order_release);
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// drm_syncobj export (for the release timeline)
+// ---------------------------------------------------------------------------
+//
+// We don't pull libdrm into the plugin link surface; redefine the
+// minimal kernel uAPI subset here. Layouts mirror <linux/drm.h>.
+
+namespace {
+
+struct WwDrmSyncobjCreate {
+    uint32_t handle;
+    uint32_t flags;
+};
+struct WwDrmSyncobjHandle {
+    uint32_t handle;
+    uint32_t flags;
+    int32_t  fd;
+    uint32_t pad;
+};
+struct WwDrmSyncobjDestroy {
+    uint32_t handle;
+    uint32_t pad;
+};
+struct WwDrmSyncobjTimelineWait {
+    uint64_t handles;       // ptr to u32 array
+    uint64_t points;        // ptr to u64 array
+    int64_t  timeout_nsec;  // absolute CLOCK_MONOTONIC
+    uint32_t count_handles;
+    uint32_t flags;
+    uint32_t first_signaled;
+    uint32_t pad;
+};
+
+#ifndef DRM_IOCTL_BASE
+#define DRM_IOCTL_BASE 'd'
+#endif
+#define WW_DRM_IOCTL_SYNCOBJ_CREATE \
+    _IOWR(DRM_IOCTL_BASE, 0xBF, WwDrmSyncobjCreate)
+#define WW_DRM_IOCTL_SYNCOBJ_DESTROY \
+    _IOWR(DRM_IOCTL_BASE, 0xC0, WwDrmSyncobjDestroy)
+#define WW_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD \
+    _IOWR(DRM_IOCTL_BASE, 0xC1, WwDrmSyncobjHandle)
+#define WW_DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT \
+    _IOWR(DRM_IOCTL_BASE, 0xCA, WwDrmSyncobjTimelineWait)
+#define WW_DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL (1u << 0)
+
+// Create a fresh drm_syncobj on `drm_fd` and ship its OPAQUE_FD
+// export over the bridge as a `ReleaseSyncobj` event. Caches the
+// kernel handle on `s.release_syncobj_handle` so the destructor
+// can DESTROY it. Returns true on success.
+bool emit_release_syncobj(HostState& s, int drm_fd) {
+    WwDrmSyncobjCreate cr {};
+    if (::ioctl(drm_fd, WW_DRM_IOCTL_SYNCOBJ_CREATE, &cr) != 0) {
+        std::fprintf(stderr,
+                     "waywallen-mpv-renderer: DRM_IOCTL_SYNCOBJ_CREATE failed: %s\n",
+                     std::strerror(errno));
+        return false;
+    }
+    s.release_syncobj_handle = cr.handle;
+
+    WwDrmSyncobjHandle h2fd {};
+    h2fd.handle = cr.handle;
+    h2fd.fd     = -1;
+    if (::ioctl(drm_fd, WW_DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &h2fd) != 0) {
+        std::fprintf(stderr,
+                     "waywallen-mpv-renderer: DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD failed: %s\n",
+                     std::strerror(errno));
+        return false;
+    }
+    int rc;
+    {
+        std::lock_guard<std::mutex> lock(s.send_mu);
+        rc = ww_bridge_send_release_syncobj(s.sock, h2fd.fd);
+    }
+    ::close(h2fd.fd);
+    if (rc != 0) {
+        std::fprintf(stderr,
+                     "waywallen-mpv-renderer: send release_syncobj failed: %d\n",
+                     rc);
+        return false;
+    }
+    return true;
+}
+
+void destroy_release_syncobj(HostState& s, int drm_fd) {
+    if (s.release_syncobj_handle == 0 || drm_fd < 0) return;
+    WwDrmSyncobjDestroy dst { s.release_syncobj_handle, 0 };
+    (void)::ioctl(drm_fd, WW_DRM_IOCTL_SYNCOBJ_DESTROY, &dst);
+    s.release_syncobj_handle = 0;
+}
+
+// Block until release_syncobj@point is signaled. Returns true on
+// signal, false on timeout/ioctl error (caller logs and proceeds —
+// running ahead of consumers is preferable to a stuck producer).
+// `timeout_ms` is wall-clock from now.
+bool wait_release_point(int drm_fd, uint32_t handle, uint64_t point,
+                        unsigned int timeout_ms) {
+    if (drm_fd < 0 || handle == 0 || point == 0) return true;
+    struct timespec ts {};
+    if (::clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return false;
+    int64_t deadline = static_cast<int64_t>(ts.tv_sec) * 1'000'000'000
+                       + static_cast<int64_t>(ts.tv_nsec)
+                       + static_cast<int64_t>(timeout_ms) * 1'000'000;
+
+    uint32_t handles[1] = { handle };
+    uint64_t points[1]  = { point };
+    WwDrmSyncobjTimelineWait arg {};
+    arg.handles       = reinterpret_cast<uintptr_t>(handles);
+    arg.points        = reinterpret_cast<uintptr_t>(points);
+    arg.timeout_nsec  = deadline;
+    arg.count_handles = 1;
+    arg.flags         = WW_DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL;
+
+    if (::ioctl(drm_fd, WW_DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, &arg) != 0) {
+        // ETIME = compositor still using buffer; we run ahead anyway
+        // to avoid stalling mpv's clock. Other errors are logged at
+        // the call site for visibility.
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 
 // ---------------------------------------------------------------------------
@@ -664,6 +810,20 @@ int main(int argc, char** argv) {
                  "waywallen-mpv-renderer: ready drm_render=%u:%u\n",
                  drm_render_major, drm_render_minor);
 
+    // Allocate the release timeline syncobj on the GBM-owned DRM fd
+    // and send the OPAQUE_FD export to the daemon. Required before the
+    // first frame_ready (which carries a release_point on this
+    // timeline). If we can't allocate, the daemon's reaper will warn
+    // and skip TRANSFERs — frames still flow, just no producer-side
+    // back-pressure.
+    if (gl.drm_fd >= 0 && !emit_release_syncobj(host, gl.drm_fd)) {
+        std::fprintf(stderr,
+                     "waywallen-mpv-renderer: continuing without release_syncobj\n");
+    } else if (gl.drm_fd < 0) {
+        std::fprintf(stderr,
+                     "waywallen-mpv-renderer: no DRM fd, skipping release_syncobj\n");
+    }
+
     send_bind(host, opt, gl);
 
     std::thread reader([&]() { reader_loop(host, mpv, opt, gl, wake); });
@@ -689,6 +849,29 @@ int main(int argc, char** argv) {
         const uint64_t update = mpv_render_context_update(mpv.ctx);
         if (!(update & MPV_RENDER_UPDATE_FRAME)) continue;
 
+        // Producer back-pressure: wait until every consumer has
+        // released the previous use of this slot before overwriting
+        // the dma-buf. Skip on first rotation through the slots
+        // (last_release_point[slot] == 0). Snapshot the point under
+        // send_mu so a racing apply_configure doesn't tear it.
+        uint64_t wait_point;
+        {
+            std::lock_guard<std::mutex> lock(host.send_mu);
+            wait_point = host.last_release_point[slot];
+        }
+        if (wait_point > 0
+            && !wait_release_point(gl.drm_fd, host.release_syncobj_handle,
+                                   wait_point, /*timeout_ms=*/250)) {
+            // Soft fail: log and proceed. The compositor MIGHT still
+            // be reading the buffer, but waiting longer would stall
+            // mpv's clock. The reaper's force-SIGNAL fallback also
+            // covers this from the other side.
+            std::fprintf(stderr,
+                         "waywallen-mpv-renderer: release timeline wait timed out "
+                         "at point %llu (slot %u), proceeding anyway\n",
+                         (unsigned long long)wait_point, slot);
+        }
+
         if (!mpv_render_into_slot(mpv, gl, slot, opt)) continue;
 
         send_frame(host, gl, slot);
@@ -709,6 +892,7 @@ int main(int argc, char** argv) {
     }
     ww_bridge_close(host.sock);
 
+    destroy_release_syncobj(host, gl.drm_fd);
     destroy_gl(gl);
     return 0;
 }

@@ -104,6 +104,7 @@ typedef enum ww_event_op {
     WW_EVT_BIND_BUFFERS = 2,
     WW_EVT_FRAME_READY = 3,
     WW_EVT_ERROR = 4,
+    WW_EVT_RELEASE_SYNCOBJ = 5,
 } ww_event_op_t;
 
 typedef struct ww_req_hello_t {
@@ -166,11 +167,16 @@ typedef struct ww_evt_frame_ready_t {
     uint32_t image_index;
     uint64_t seq;
     uint64_t ts_ns;
+    uint64_t release_point;
 } ww_evt_frame_ready_t;
 
 typedef struct ww_evt_error_t {
     char *msg;
 } ww_evt_error_t;
+
+typedef struct ww_evt_release_syncobj_t {
+    int _empty; /* C forbids empty structs */
+} ww_evt_release_syncobj_t;
 
 /* --- Per-message functions ---
  * encode:        append wire body to `out` (header is the caller's job)
@@ -238,6 +244,11 @@ int  ww_evt_error_encode(const ww_evt_error_t *m, ww_buf_t *out);
 int  ww_evt_error_decode(const uint8_t *buf, size_t len, ww_evt_error_t *out);
 void ww_evt_error_free(ww_evt_error_t *m);
 uint32_t ww_evt_error_expected_fds(const ww_evt_error_t *m);
+
+int  ww_evt_release_syncobj_encode(const ww_evt_release_syncobj_t *m, ww_buf_t *out);
+int  ww_evt_release_syncobj_decode(const uint8_t *buf, size_t len, ww_evt_release_syncobj_t *out);
+void ww_evt_release_syncobj_free(ww_evt_release_syncobj_t *m);
+uint32_t ww_evt_release_syncobj_expected_fds(const ww_evt_release_syncobj_t *m);
 
 /* --- Output buffer helpers --- */
 void ww_buf_init(ww_buf_t *b);

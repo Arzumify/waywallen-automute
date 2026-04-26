@@ -22,6 +22,7 @@ mod renderer_manager;
 mod routing;
 mod scheduler;
 mod settings;
+mod sync;
 mod tasks;
 mod tray;
 mod wallpaper_type;
