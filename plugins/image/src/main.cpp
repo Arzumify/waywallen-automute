@@ -1,16 +1,22 @@
-// waywallen-image-renderer — FFmpeg-decoded still image renderer subprocess
-// for the waywallen daemon. Spawned for wallpapers of type "image".
+// waywallen-image-renderer — FFmpeg-decoded still image renderer subprocess.
 //
+// All DMA-BUF allocation + modifier negotiation + drm_syncobj sync lives
+// in <waywallen-bridge/pool.h>. This plugin owns:
+//   - Vulkan instance + physical device + device + queue (for upload)
+//   - Staging buffer + command buffer (uploads RGBA into a bridge slot)
+//   - libav decode pipeline
 
 #include <waywallen-bridge/bridge.h>
+#include <waywallen-bridge/drm_fourcc.h>
+#include <waywallen-bridge/ipc_v1.h>
+#include <waywallen-bridge/pool.h>
+#include <waywallen-bridge/probe_vk.h>
 
 #include "av_image.hpp"
 #include "vk_producer.hpp"
-#include <waywallen-bridge/probe_vk.h>
 
 #include <atomic>
 #include <cerrno>
-#include <chrono>
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
@@ -34,20 +40,13 @@ struct Options {
     uint32_t    height { 1080 };
     bool        decode_only { false };
     bool        vulkan_probe { false };
-    bool        produce_once { false };
     // Test hook: probe the picked Vulkan device for supported (fourcc,
     // modifier) pairs and emit a `PeerCaps`-shaped JSON document on
     // stdout, then exit. Consumed by the dmabuf_roundtrip_e2e test
-    // orchestrator to compute the producer×consumer cap intersection
+    // orchestrator to compute the producer × consumer cap intersection
     // before per-pair iteration.
     bool        print_caps { false };
 };
-
-uint64_t now_ns() {
-    const auto t = std::chrono::steady_clock::now().time_since_epoch();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(t).count());
-}
 
 [[noreturn]] void die(const std::string& msg) {
     std::fprintf(stderr, "waywallen-image-renderer: %s\n", msg.c_str());
@@ -62,74 +61,40 @@ Options parse_args(int argc, char** argv) {
             if (i + 1 >= argc) return {};
             return argv[++i];
         };
-        if (a == "--ipc") {
-            o.ipc_path = next();
-        } else if (a == "--width") {
-            o.width = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
-        } else if (a == "--height") {
-            o.height = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
-        } else if (a == "--image" || a == "--path") {
-            o.image_path = next();
-        } else if (a == "--decode-only") {
-            // Test hook: run the ffmpeg decode path and exit without
-            // opening the bridge socket. Non-zero exit on decode failure.
-            o.decode_only = true;
-        } else if (a == "--vulkan-probe") {
-            // Test hook: build one VkProducer slot, print its layout,
-            // exit. Non-zero on failure. No IPC, no decode.
-            o.vulkan_probe = true;
-        } else if (a == "--produce-once") {
-            // Test hook: decode --image, upload into one VkProducer slot,
-            // export a sync_fd, close fds, exit. No IPC.
-            o.produce_once = true;
-        } else if (a == "--print-caps") {
-            o.print_caps = true;
-        } else {
-            // Swallow unknown --key value pairs forwarded by the daemon from
-            // source-plugin metadata (e.g. --fps, --workshop_id for animated
-            // formats we don't implement yet).
-            if (!a.empty() && a.rfind("--", 0) == 0 && i + 1 < argc
-                && std::string(argv[i + 1]).rfind("--", 0) != 0) {
-                ++i;
-            }
-        }
+        if (a == "--ipc")              o.ipc_path = next();
+        else if (a == "--width")       o.width = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--height")      o.height = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--image" || a == "--path") o.image_path = next();
+        else if (a == "--decode-only") o.decode_only = true;
+        else if (a == "--vulkan-probe") o.vulkan_probe = true;
+        else if (a == "--print-caps")  o.print_caps = true;
+        else ww_bridge_skip_unknown_kv_arg(&i, argc, argv);
     }
     return o;
 }
 
 
-// ---------------------------------------------------------------------------
-// IPC
-// ---------------------------------------------------------------------------
-
 struct HostState {
-    int                   sock { -1 };
-    std::mutex            send_mu;
-    std::atomic<bool>     shutdown { false };
-    std::mutex            wake_mu;
-    std::condition_variable wake_cv;
+    int                    sock { -1 };
+    ww_pool_t             *pool { nullptr };
+    std::atomic<bool>      shutdown { false };
+    std::atomic<bool>      negotiated { false };
 
-    // Producer + last-uploaded RGBA buffer + bind-buffers generation.
-    // Held under send_mu when used from apply_control's
-    // ConfigureBuffers branch (rebuild + re-export + re-emit
-    // bind_buffers + frame_ready). The main thread populates these
-    // before the reader thread starts.
-    ww_image::VkProducer* producer { nullptr };
-    const uint8_t*        rgba_data { nullptr };
-    size_t                rgba_size { 0 };
-    uint64_t              bind_generation { 0 };
-    uint64_t              next_seq { 1 };
-    // Monotonic counter for `frame_ready.release_point`. Each new
-    // submit waits on `last_release_point` (the previous frame's
-    // point — daemon will have transferred consumer release fences
-    // onto it once they signal) and publishes a fresh point. Starts
-    // at 0 so the very first submit skips the wait.
-    uint64_t              last_release_point { 0 };
+    /* Reader → main negotiate handoff. */
+    std::mutex             neg_mu;
+    std::condition_variable neg_cv;
+    bool                   neg_pending { false };
+    ww_pool_directive_t    neg_directive {};
+
+    /* Cached RGBA buffer (kept alive across re-negotiations so we
+     * can re-upload after a directive change). */
+    const uint8_t*         rgba_data { nullptr };
+    size_t                 rgba_size { 0 };
 };
 
 void signal_shutdown(HostState& s) {
     s.shutdown.store(true, std::memory_order_release);
-    s.wake_cv.notify_all();
+    s.neg_cv.notify_all();
 }
 
 // Test hook: when WAYWALLEN_IMAGE_DUMP_DIR is set, write the RGBA8
@@ -141,23 +106,21 @@ void signal_shutdown(HostState& s) {
 //
 // Filename: producer-{seq:06}-0x{fourcc:08x}-0x{modifier:016x}.bin
 // Sidecar:  same name with .json — width/height/stride/fourcc/modifier.
-//
-// Cheap and best-effort: any I/O failure is logged but does not break
-// the renderer (a CI sandbox without write perms shouldn't take down
-// the producer).
-static void maybe_dump_producer_frame(const HostState& s, uint64_t seq) {
+static void maybe_dump_producer_frame(const HostState& host,
+                                      const ww_pool_directive_t& d,
+                                      const ww_pool_slot_t& s,
+                                      uint64_t seq) {
     const char* dir = std::getenv("WAYWALLEN_IMAGE_DUMP_DIR");
     if (!dir || !*dir) return;
-    if (!s.producer || !s.rgba_data || s.rgba_size == 0) return;
-    const auto& L = s.producer->layout();
+    if (!host.rgba_data || host.rgba_size == 0) return;
 
     char path[512];
     std::snprintf(path, sizeof(path),
                   "%s/producer-%06llu-0x%08x-0x%016llx.bin",
                   dir,
                   static_cast<unsigned long long>(seq),
-                  L.drm_fourcc,
-                  static_cast<unsigned long long>(L.drm_modifier));
+                  d.fourcc,
+                  static_cast<unsigned long long>(d.modifier));
     FILE* f = std::fopen(path, "wb");
     if (!f) {
         std::fprintf(stderr,
@@ -165,12 +128,12 @@ static void maybe_dump_producer_frame(const HostState& s, uint64_t seq) {
                      path, std::strerror(errno));
         return;
     }
-    size_t w = std::fwrite(s.rgba_data, 1, s.rgba_size, f);
+    size_t w = std::fwrite(host.rgba_data, 1, host.rgba_size, f);
     std::fclose(f);
-    if (w != s.rgba_size) {
+    if (w != host.rgba_size) {
         std::fprintf(stderr,
                      "waywallen-image-renderer: dump short write %zu/%zu to %s\n",
-                     w, s.rgba_size, path);
+                     w, host.rgba_size, path);
         return;
     }
 
@@ -179,16 +142,16 @@ static void maybe_dump_producer_frame(const HostState& s, uint64_t seq) {
                   "%s/producer-%06llu-0x%08x-0x%016llx.json",
                   dir,
                   static_cast<unsigned long long>(seq),
-                  L.drm_fourcc,
-                  static_cast<unsigned long long>(L.drm_modifier));
+                  d.fourcc,
+                  static_cast<unsigned long long>(d.modifier));
     FILE* sf = std::fopen(sidecar, "w");
     if (!sf) return;
-    // Note: the dump is always tightly-packed RGBA8 (`width*height*4` bytes)
-    // — that's the input format `decode_to_rgba` produces and what
-    // `upload_and_submit` accepts. The DMA-BUF stride/plane_offset are the
-    // *destination* layout in the GPU buffer, which the consumer reads
-    // back into the same tightly-packed shape; both sides' dumps are
-    // therefore directly comparable.
+    // Note: the dump is always tightly-packed RGBA8 (`width*height*4`
+    // bytes) — that's the input format `decode_to_rgba` produces and
+    // what `upload_into` accepts. The DMA-BUF stride/plane_offset are
+    // the *destination* layout in the GPU buffer, which the consumer
+    // reads back into the same tightly-packed shape; both sides' dumps
+    // are therefore directly comparable.
     std::fprintf(sf,
                  "{\n"
                  "  \"kind\": \"producer\",\n"
@@ -205,212 +168,117 @@ static void maybe_dump_producer_frame(const HostState& s, uint64_t seq) {
                  "  \"dump_layout\": \"tightly_packed_rgba8\"\n"
                  "}\n",
                  static_cast<unsigned long long>(seq),
-                 L.drm_fourcc,
-                 static_cast<unsigned long long>(L.drm_modifier),
-                 L.width, L.height, L.stride, L.plane_offset, L.size,
-                 L.width * 4u, L.height);
+                 d.fourcc,
+                 static_cast<unsigned long long>(d.modifier),
+                 s.width, s.height, s.stride, s.plane_offset, s.size,
+                 s.width * 4u, s.height);
     std::fclose(sf);
 }
 
-// Re-export the producer's current slot, send fresh bind_buffers + a
-// frame_ready that signals the just-uploaded image. Caller must hold
-// `s.send_mu`.
-static bool emit_bind_and_frame_locked(HostState& s, int sync_fd) {
-    if (!s.producer) return false;
-    const auto& L = s.producer->layout();
-
-    s.bind_generation += 1;
-
-    uint64_t sizes[1] = { L.size };
-    int      fds[1]   = { L.dmabuf_fd };
-
-    ww_evt_bind_buffers_t bb {};
-    bb.generation   = s.bind_generation;
-    bb.flags        = s.producer->flags();
-    bb.count        = 1;
-    bb.fourcc       = L.drm_fourcc;
-    bb.width        = L.width;
-    bb.height       = L.height;
-    bb.stride       = L.stride;
-    bb.modifier     = L.drm_modifier;
-    bb.plane_offset = L.plane_offset;
-    bb.sizes.count  = 1;
-    bb.sizes.data   = sizes;
-
-    if (int rc = ww_bridge_send_bind_buffers(s.sock, &bb, fds); rc != 0) {
+bool upload_to_slot(HostState& host, ww_image::VkProducer& producer,
+                    const ww_pool_directive_t& directive,
+                    uint32_t slot_index) {
+    ww_pool_slot_t s {};
+    if (int rc = ww_bridge_pool_acquire_slot(host.pool, slot_index, &s);
+        rc != 0) {
         std::fprintf(stderr,
-                     "waywallen-image-renderer: send bind_buffers failed: %d\n",
-                     rc);
-        ::close(sync_fd);
+                     "waywallen-image-renderer: acquire_slot(%u) failed: %d\n",
+                     slot_index, rc);
+        return false;
+    }
+    if (!s.vk_image) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: slot %u has no VkImage handle\n",
+                     slot_index);
         return false;
     }
 
-    // Advance the release timeline: this submit's release fence will
-    // arrive on the daemon side as `release_timeline_sem_ @ next_point`
-    // once every consumer signals their per-frame syncobj.
-    const uint64_t next_release_point = s.last_release_point + 1;
+    static std::atomic<uint64_t> g_dump_seq { 0 };
+    maybe_dump_producer_frame(host, directive, s,
+                              g_dump_seq.fetch_add(1, std::memory_order_relaxed));
 
-    ww_evt_frame_ready_t fr {};
-    fr.image_index   = 0;
-    fr.seq           = s.next_seq++;
-    fr.ts_ns         = now_ns();
-    fr.release_point = next_release_point;
-    maybe_dump_producer_frame(s, fr.seq);
-    int rc = ww_bridge_send_frame_ready(s.sock, &fr, sync_fd);
-    ::close(sync_fd);
-    if (rc != 0) {
+    std::string uerr;
+    int sync_fd = producer.upload_into(
+        reinterpret_cast<VkImage>(s.vk_image),
+        s.width, s.height,
+        host.rgba_data, host.rgba_size, &uerr);
+    if (sync_fd < 0) {
         std::fprintf(stderr,
-                     "waywallen-image-renderer: send frame_ready failed: %d\n",
-                     rc);
+                     "waywallen-image-renderer: upload_into failed: %s\n",
+                     uerr.c_str());
         return false;
     }
-    s.last_release_point = next_release_point;
+    if (int rc = ww_bridge_pool_submit_slot(host.pool, host.sock, slot_index, sync_fd);
+        rc != 0) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: submit_slot rc=%d\n", rc);
+        return false;
+    }
     return true;
 }
 
-// Honour the daemon's `negotiate_buffers`: rebuild the producer's
-// slot with the requested (modifier, placement), re-upload the
-// cached RGBA buffer, and re-emit bind_buffers + frame_ready.
-// Returns 0 on success, a negative errno-ish value on rebuild
-// failure (caller maps to `bind_failed`), or a positive non-zero
-// for fatal errors that should shut the renderer down.
-static int apply_negotiate(HostState& s, uint32_t flags, uint64_t modifier) {
-    std::lock_guard<std::mutex> lock(s.send_mu);
+/* Apply a directive received from the daemon. After bridge brings the
+ * slots up, upload our cached RGBA into slot 0 and submit one frame.
+ * Static images: a single submit per (re-)negotiation is enough. */
+void apply_negotiate_request(HostState& host, ww_image::VkProducer& producer,
+                             const ww_pool_directive_t& d) {
+    int rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+    if (rc != 0) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: pool_apply_directive failed: %d\n", rc);
+        if (rc > 0) signal_shutdown(host);
+        return;
+    }
+    if (!upload_to_slot(host, producer, d, 0)) {
+        signal_shutdown(host);
+        return;
+    }
+    host.negotiated.store(true, std::memory_order_release);
     std::fprintf(stderr,
-                 "waywallen-image-renderer: NegotiateBuffers "
-                 "(requested flags=0x%x modifier=0x%016llx, current flags=0x%x modifier=0x%016llx)\n",
-                 flags,
-                 static_cast<unsigned long long>(modifier),
-                 s.producer ? s.producer->flags() : 0u,
-                 s.producer ? static_cast<unsigned long long>(s.producer->modifier())
-                            : 0ULL);
-    if (!s.producer || !s.rgba_data) {
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: NegotiateBuffers ignored "
-                     "(no producer/image yet)\n");
-        return 1;
-    }
-    if (flags == s.producer->flags() && modifier == s.producer->modifier()) {
-        // Already at the requested (flags, modifier) — re-upload to
-        // re-emit a fresh bind_buffers generation.
-        std::string uerr;
-        int sync_fd = s.producer->upload_and_submit(
-            s.rgba_data, s.rgba_size, s.last_release_point, &uerr);
-        if (sync_fd < 0) {
-            std::fprintf(stderr,
-                         "waywallen-image-renderer: re-upload failed: %s\n",
-                         uerr.c_str());
-            return 1;
-        }
-        emit_bind_and_frame_locked(s, sync_fd);
-        return 0;
-    }
-
-    std::string rerr;
-    if (!s.producer->rebuild(flags, modifier, &rerr)) {
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: rebuild(flags=0x%x modifier=0x%016llx) failed: %s\n",
-                     flags,
-                     static_cast<unsigned long long>(modifier),
-                     rerr.c_str());
-        // Non-fatal: tell the daemon to retry with a different
-        // (fourcc, modifier) via the iter-5 blacklist loop. The
-        // producer's slot is now in a half-torn-down state; the
-        // next successful rebuild will replace it. If the daemon
-        // runs out of options it will eventually give up.
-        return -1;
-    }
-    // Rebuild created a fresh image (different memory), so the prior
-    // release_point no longer corresponds to anyone holding the new
-    // dma-buf. Reset and skip the wait on this submit.
-    s.last_release_point = 0;
-    std::string uerr;
-    int sync_fd = s.producer->upload_and_submit(
-        s.rgba_data, s.rgba_size, /*wait_release_point=*/0, &uerr);
-    if (sync_fd < 0) {
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: post-rebuild upload failed: %s\n",
-                     uerr.c_str());
-        return 1;
-    }
-    if (!emit_bind_and_frame_locked(s, sync_fd)) {
-        return 1;
-    }
-    return 0;
+                 "waywallen-image-renderer: NegotiateBuffers honored "
+                 "(path=%u mem_source=%u modifier=0x%016llx) — bind+frame emitted\n",
+                 d.category, d.mem_source,
+                 static_cast<unsigned long long>(d.modifier));
 }
 
-void apply_control(HostState& s, const ww_bridge_control_t& c) {
+void apply_control(HostState& host, const ww_bridge_control_t& c) {
     switch (c.op) {
     case WW_REQ_HELLO:
+    case WW_REQ_PLAY:
+    case WW_REQ_PAUSE:
+    case WW_REQ_MOUSE:
+    case WW_REQ_SET_FPS:
         break;
     case WW_REQ_LOAD_SCENE:
-        // TODO(M4): re-decode and re-upload when the daemon hot-swaps the
-        // image. Today we log and keep the initial image.
         std::fprintf(stderr,
                      "waywallen-image-renderer: load_scene pkg=%s "
                      "(hot-swap not yet implemented)\n",
                      c.u.load_scene.pkg ? c.u.load_scene.pkg : "(null)");
         break;
-    case WW_REQ_PLAY:
-    case WW_REQ_PAUSE:
-        // Static images: play/pause are no-ops. Animated formats land in M5.
-        break;
-    case WW_REQ_MOUSE:
-    case WW_REQ_SET_FPS:
-        // Images don't respond to input and pace themselves (zero fps).
-        break;
     case WW_REQ_SHUTDOWN:
-        signal_shutdown(s);
+        signal_shutdown(host);
         break;
     case WW_REQ_NEGOTIATE_BUFFERS: {
         const auto& nb = c.u.negotiate_buffers;
-        // VkProducer is fixed to VK_FORMAT_R8G8B8A8_UNORM = ABGR8888;
-        // any other fourcc is genuinely unsupported. The modifier,
-        // however, can be any of the entries advertised in
-        // `format_caps` — `apply_negotiate` rebuilds the image with
-        // that modifier in the `VkImageDrmFormatModifierListCreateInfoEXT`
-        // list, and Vulkan picks it (it has nothing else to choose).
-        if (nb.fourcc != WW_DRM_FORMAT_ABGR8888) {
-            std::fprintf(stderr,
-                         "waywallen-image-renderer: NegotiateBuffers requested "
-                         "unsupported fourcc=0x%08x — reporting bind_failed\n",
-                         nb.fourcc);
-            int rc;
-            {
-                std::lock_guard<std::mutex> lock(s.send_mu);
-                rc = ww_bridge_send_bind_failed(
-                    s.sock, nb.fourcc, nb.modifier,
-                    /*reason=*/2 /* feature_unsupported */,
-                    "VkProducer only handles ABGR8888");
-            }
-            if (rc != 0) signal_shutdown(s);
-            break;
+        ww_pool_directive_t d {};
+        d.category    = nb.path;
+        d.mem_source  = nb.mem_source;
+        d.fourcc      = nb.fourcc;
+        d.modifier    = nb.modifier;
+        d.plane_count = nb.plane_count;
+        d.sync_mode   = nb.sync_mode;
+        d.color       = nb.color;
+        d.mem_hint    = nb.mem_hint;
+        d.width       = nb.extent_w;
+        d.height      = nb.extent_h;
+        /* Static image: one slot is enough. */
+        d.count       = 1;
+        {
+            std::lock_guard<std::mutex> lk(host.neg_mu);
+            host.neg_directive = d;
+            host.neg_pending = true;
         }
-        // Map mem_hint → BUF_HOST_VISIBLE flag.
-        const uint32_t flags =
-            (nb.mem_hint & WW_MEM_HINT_HOST_VISIBLE) ? WW_BUF_HOST_VISIBLE : 0u;
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: NegotiateBuffers honored "
-                     "(mem_hint=0x%x → flags=0x%x, modifier=0x%016llx)\n",
-                     nb.mem_hint, flags,
-                     static_cast<unsigned long long>(nb.modifier));
-        int an = apply_negotiate(s, flags, nb.modifier);
-        if (an < 0) {
-            // Rebuild failed for this (fourcc, modifier). Report
-            // bind_failed so the daemon's iter-5 blacklist loop
-            // re-picks; don't shut down on a single rejection.
-            int rc;
-            {
-                std::lock_guard<std::mutex> lock(s.send_mu);
-                rc = ww_bridge_send_bind_failed(
-                    s.sock, nb.fourcc, nb.modifier,
-                    /*reason=*/0 /* import_failed */,
-                    "vk_producer rebuild rejected modifier");
-            }
-            if (rc != 0) signal_shutdown(s);
-        } else if (an > 0) {
-            signal_shutdown(s);
-        }
+        host.neg_cv.notify_all();
         break;
     }
     default:
@@ -421,29 +289,26 @@ void apply_control(HostState& s, const ww_bridge_control_t& c) {
     }
 }
 
-void reader_loop(HostState& s) {
-    while (!s.shutdown.load(std::memory_order_acquire)) {
+void reader_loop(HostState& host) {
+    while (!host.shutdown.load(std::memory_order_acquire)) {
         ww_bridge_control_t msg {};
-        int                 rc = ww_bridge_recv_control(s.sock, &msg);
+        int rc = ww_bridge_recv_control(host.sock, &msg);
         if (rc != 0) {
-            if (!s.shutdown.load(std::memory_order_acquire)) {
+            if (!host.shutdown.load(std::memory_order_acquire)) {
                 std::fprintf(stderr,
                              "waywallen-image-renderer: recv_control failed: %d\n",
                              rc);
             }
-            signal_shutdown(s);
+            signal_shutdown(host);
             return;
         }
-        apply_control(s, msg);
+        apply_control(host, msg);
         ww_bridge_control_free(&msg);
     }
 }
 
-} // namespace
-
-
 // ---------------------------------------------------------------------------
-// main
+// --print-caps
 // ---------------------------------------------------------------------------
 
 // Emit a single JSON document on stdout that mirrors the
@@ -451,29 +316,116 @@ void reader_loop(HostState& s) {
 // (no nlohmann dep) because the schema is tiny and stable. Keep the
 // field names and ordering in sync with
 // `displays/dump-test/src/main.rs::PeerCapsJson`.
+//
+// We don't have a public "query caps without a socket" entry point on
+// the bridge pool; instead we build a Vulkan pool, hand it one end of
+// a `socketpair(AF_UNIX)`, ask it to advertise, then drain the
+// `format_caps` message on the other end and decode it.
 static int print_caps_json(const Options& opt) {
     std::string verr;
-    auto prod = ww_image::VkProducer::create(opt.width, opt.height,
-                                              /*flags=*/0,
-                                              /*modifier=*/0 /* LINEAR */, &verr);
-    if (!prod) {
+    auto producer = ww_image::VkProducer::create(opt.width, opt.height, &verr);
+    if (!producer) {
         std::fprintf(stderr, "waywallen-image-renderer: vk_producer: %s\n",
                      verr.c_str());
         return 1;
     }
-    ww_image::VkFormatCaps caps {};
-    std::string ferr;
-    if (!prod->query_format_caps(&caps, &ferr)) {
-        std::fprintf(stderr, "waywallen-image-renderer: query_format_caps: %s\n",
-                     ferr.c_str());
+
+    int sv[2] = { -1, -1 };
+    if (::socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: socketpair: %s\n",
+                     std::strerror(errno));
         return 1;
     }
 
-    auto put_uuid = [](const uint8_t (&u)[16]) -> std::string {
+    ww_pool_vulkan_init_t pool_init {};
+    pool_init.instance              = producer->instance();
+    pool_init.physical_device       = producer->physical_device();
+    pool_init.device                = producer->device();
+    pool_init.queue                 = producer->queue();
+    pool_init.queue_family_index    = producer->queue_family_index();
+    pool_init.get_instance_proc_addr =
+        reinterpret_cast<void *(*)(void *, const char *)>(vkGetInstanceProcAddr);
+    pool_init.device_uuid           = producer->device_uuid();
+    pool_init.driver_uuid           = producer->driver_uuid();
+    pool_init.drm_render_major      = producer->drm_render_major();
+    pool_init.drm_render_minor      = producer->drm_render_minor();
+    pool_init.drm_render_fd         = producer->drm_render_fd();
+
+    ww_pool_t* pool = nullptr;
+    if (int rc = ww_bridge_pool_create(WW_POOL_BACKEND_VULKAN, &pool_init, &pool);
+        rc != 0) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: pool_create: %d\n", rc);
+        ::close(sv[0]); ::close(sv[1]);
+        return 1;
+    }
+
+    if (int rc = ww_bridge_pool_advertise_caps(pool, sv[0],
+                                               opt.width, opt.height,
+                                               WW_MEM_HINT_DEVICE_LOCAL
+                                               | WW_MEM_HINT_HOST_VISIBLE);
+        rc != 0) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: advertise_caps: %d\n", rc);
+        ww_bridge_pool_destroy(pool);
+        ::close(sv[0]); ::close(sv[1]);
+        return 1;
+    }
+
+    /* Drain frames on sv[1] until we get the FormatCaps. The pool
+     * writes (in order): Ready, ReleaseSyncobj (with a syncobj fd),
+     * FormatCaps. */
+    ww_evt_format_caps_t caps {};
+    bool got_caps = false;
+    for (int frame = 0; frame < 6 && !got_caps; ++frame) {
+        uint16_t op = 0;
+        uint8_t* body = nullptr;
+        size_t body_len = 0;
+        int fds[2] = { -1, -1 };
+        size_t n_fds = 0;
+        int rc = ww_bridge_recv_frame(sv[1], &op, &body, &body_len,
+                                      fds, 2, &n_fds);
+        if (rc != 0) {
+            std::fprintf(stderr,
+                         "waywallen-image-renderer: recv_frame: %d\n", rc);
+            break;
+        }
+        for (size_t i = 0; i < n_fds; ++i) {
+            if (fds[i] >= 0) ::close(fds[i]);
+        }
+        if (op == WW_EVT_FORMAT_CAPS) {
+            if (ww_evt_format_caps_decode(body, body_len, &caps) == 0) {
+                got_caps = true;
+            }
+        }
+        free(body);
+    }
+
+    ww_bridge_pool_destroy(pool);
+    ::close(sv[0]); ::close(sv[1]);
+
+    if (!got_caps) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: did not observe FormatCaps\n");
+        return 1;
+    }
+
+    auto put_uuid = [](const ww_array_u32_t& a) -> std::string {
+        // device_uuid / driver_uuid are 16 bytes packed as 4×u32 LE on
+        // the wire. Unpack back to 16 bytes for the JSON output.
+        uint8_t bytes[16] = {0};
+        for (uint32_t i = 0; i < a.count && i < 4; ++i) {
+            uint32_t v = a.data[i];
+            bytes[i*4 + 0] = static_cast<uint8_t>( v        & 0xff);
+            bytes[i*4 + 1] = static_cast<uint8_t>((v >>  8) & 0xff);
+            bytes[i*4 + 2] = static_cast<uint8_t>((v >> 16) & 0xff);
+            bytes[i*4 + 3] = static_cast<uint8_t>((v >> 24) & 0xff);
+        }
         std::string s = "[";
         for (int i = 0; i < 16; ++i) {
             char buf[8];
-            std::snprintf(buf, sizeof(buf), "%s%u", i ? "," : "", u[i]);
+            std::snprintf(buf, sizeof(buf), "%s%u", i ? "," : "", bytes[i]);
             s += buf;
         }
         s += "]";
@@ -483,37 +435,41 @@ static int print_caps_json(const Options& opt) {
     std::printf("{\n");
     std::printf("  \"by_fourcc\": {\n");
     size_t cursor = 0;
-    for (size_t i = 0; i < caps.fourccs.size(); ++i) {
-        const uint32_t fc = caps.fourccs[i];
-        const uint32_t n  = caps.mod_counts[i];
+    for (uint32_t i = 0; i < caps.fourccs.count; ++i) {
+        const uint32_t fc = caps.fourccs.data[i];
+        const uint32_t n  = caps.mod_counts.data[i];
         std::printf("    \"0x%08x\": [", fc);
         for (uint32_t j = 0; j < n; ++j) {
             std::printf("%s\n      {\"modifier\": %llu, \"usage\": %u, \"plane_count\": %u}",
                         j ? "," : "",
-                        static_cast<unsigned long long>(caps.modifiers[cursor + j]),
-                        caps.usages[cursor + j],
-                        caps.plane_counts[cursor + j]);
+                        static_cast<unsigned long long>(caps.modifiers.data[cursor + j]),
+                        caps.usages.data[cursor + j],
+                        caps.plane_counts.data[cursor + j]);
         }
         cursor += n;
-        std::printf("\n    ]%s\n", (i + 1 < caps.fourccs.size()) ? "," : "");
+        std::printf("\n    ]%s\n", (i + 1 < caps.fourccs.count) ? "," : "");
     }
     std::printf("  },\n");
     std::printf("  \"device_uuid\": %s,\n", put_uuid(caps.device_uuid).c_str());
     std::printf("  \"driver_uuid\": %s,\n", put_uuid(caps.driver_uuid).c_str());
-    std::printf("  \"drm_render_major\": %u,\n", prod->drm_render_major());
-    std::printf("  \"drm_render_minor\": %u,\n", prod->drm_render_minor());
-    std::printf("  \"sync\": %u,\n",
-                static_cast<unsigned>(WW_SYNC_SYNCOBJ_TIMELINE | WW_SYNC_SYNCOBJ_BINARY));
-    std::printf("  \"color\": %u,\n",
-                static_cast<unsigned>(WW_COLOR_ENC_SRGB | WW_COLOR_RANGE_LIMITED
-                                       | WW_COLOR_ALPHA_PREMUL));
+    std::printf("  \"drm_render_major\": %u,\n", caps.drm_render_major);
+    std::printf("  \"drm_render_minor\": %u,\n", caps.drm_render_minor);
+    std::printf("  \"sync\": %u,\n", caps.sync_caps);
+    std::printf("  \"color\": %u,\n", caps.color_caps);
     std::printf("  \"mem_hint\": %u,\n", caps.mem_hints);
-    std::printf("  \"extent_max_w\": %u,\n", 16384u);
-    std::printf("  \"extent_max_h\": %u\n",  16384u);
+    std::printf("  \"extent_max_w\": %u,\n", caps.extent_max_w);
+    std::printf("  \"extent_max_h\": %u\n",  caps.extent_max_h);
     std::printf("}\n");
     std::fflush(stdout);
+    ww_evt_format_caps_free(&caps);
     return 0;
 }
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
     Options opt = parse_args(argc, argv);
@@ -524,24 +480,16 @@ int main(int argc, char** argv) {
 
     if (opt.vulkan_probe) {
         std::string verr;
-        auto prod = ww_image::VkProducer::create(opt.width, opt.height, /*flags=*/0,
-                                                  /*modifier=*/0 /* LINEAR */, &verr);
+        auto prod = ww_image::VkProducer::create(opt.width, opt.height, &verr);
         if (!prod) {
             std::fprintf(stderr, "waywallen-image-renderer: vk_producer: %s\n",
                          verr.c_str());
             return 1;
         }
-        const auto& L = prod->layout();
         std::fprintf(stderr,
-                     "waywallen-image-renderer: vk slot "
-                     "fd=%d fourcc=0x%08x mod=0x%llx "
-                     "%ux%u offset=%u stride=%u size=%u\n",
-                     L.dmabuf_fd, L.drm_fourcc,
-                     static_cast<unsigned long long>(L.drm_modifier),
-                     L.width, L.height, L.plane_offset, L.stride, L.size);
-        if (L.dmabuf_fd < 0)       { std::fprintf(stderr, "FAIL: bad fd\n");   return 1; }
-        if (L.stride < L.width*4)  { std::fprintf(stderr, "FAIL: stride\n");   return 1; }
-        if (L.size < L.stride*L.height) { std::fprintf(stderr, "FAIL: size\n"); return 1; }
+                     "waywallen-image-renderer: vulkan_probe ok "
+                     "drm_render=%u:%u\n",
+                     prod->drm_render_major(), prod->drm_render_minor());
         return 0;
     }
 
@@ -567,192 +515,88 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (opt.produce_once) {
-        if (opt.image_path.empty()) die("--produce-once requires --image");
-        ww_image::DecodeError derr;
-        ww_image::RgbaBuf buf =
-            ww_image::decode_to_rgba(opt.image_path, opt.width, opt.height, &derr);
-        if (buf.data.empty()) {
-            std::fprintf(stderr,
-                         "waywallen-image-renderer: decode failed: %s\n",
-                         derr.message.c_str());
-            return 1;
-        }
-        std::string verr;
-        auto prod = ww_image::VkProducer::create(opt.width, opt.height, /*flags=*/0,
-                                                  /*modifier=*/0 /* LINEAR */, &verr);
-        if (!prod) {
-            std::fprintf(stderr,
-                         "waywallen-image-renderer: vk_producer: %s\n",
-                         verr.c_str());
-            return 1;
-        }
-        std::string uerr;
-        int sync_fd = prod->upload_and_submit(
-            buf.data.data(), buf.data.size(),
-            /*wait_release_point=*/0, &uerr);
-        if (sync_fd < 0) {
-            std::fprintf(stderr,
-                         "waywallen-image-renderer: upload: %s\n",
-                         uerr.c_str());
-            return 1;
-        }
-        const auto& L = prod->layout();
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: produced "
-                     "dmabuf_fd=%d mod=0x%llx stride=%u size=%u sync_fd=%d\n",
-                     L.dmabuf_fd,
-                     static_cast<unsigned long long>(L.drm_modifier),
-                     L.stride, L.size, sync_fd);
-        ::close(sync_fd);
-        return 0;
-    }
-
     if (opt.ipc_path.empty()) die("--ipc <socket_path> is required");
 
     ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+
+    /* --- Decode + Vulkan setup --- */
+    if (opt.image_path.empty()) die("--image is required");
+    ww_image::DecodeError derr;
+    ww_image::RgbaBuf rgba_buf = ww_image::decode_to_rgba(
+        opt.image_path, opt.width, opt.height, &derr);
+    if (rgba_buf.data.empty()) die("decode " + opt.image_path + ": " + derr.message);
+
+    std::string verr;
+    auto producer = ww_image::VkProducer::create(opt.width, opt.height, &verr);
+    if (!producer) die("vk_producer: " + verr);
+
+    /* GPU info diagnostic (uses bridge probe_vk dispatch table). */
+    ww_bridge_vk_dt_t vdt {};
+    ww_bridge_vk_dt_load(&vdt, vkGetInstanceProcAddr, producer->instance());
+    ww_bridge_vk_log_gpu_info("waywallen-image-renderer", &vdt,
+                              producer->physical_device());
 
     HostState host;
     host.sock = ww_bridge_connect(opt.ipc_path.c_str());
     if (host.sock < 0)
         die("ww_bridge_connect: " + std::string(std::strerror(-host.sock)));
+    host.rgba_data = rgba_buf.data.data();
+    host.rgba_size = rgba_buf.data.size();
 
-    std::unique_ptr<ww_image::VkProducer> producer;
-    ww_image::RgbaBuf rgba_buf; // kept alive across rebuilds
-    if (!opt.image_path.empty()) {
-        ww_image::DecodeError derr;
-        rgba_buf = ww_image::decode_to_rgba(
-            opt.image_path, opt.width, opt.height, &derr);
-        if (rgba_buf.data.empty()) {
-            die("decode " + opt.image_path + ": " + derr.message);
-        }
+    /* --- Bridge pool: hand over Vulkan handles --- */
+    ww_pool_vulkan_init_t pool_init {};
+    pool_init.instance              = producer->instance();
+    pool_init.physical_device       = producer->physical_device();
+    pool_init.device                = producer->device();
+    pool_init.queue                 = producer->queue();
+    pool_init.queue_family_index    = producer->queue_family_index();
+    pool_init.get_instance_proc_addr =
+        reinterpret_cast<void *(*)(void *, const char *)>(vkGetInstanceProcAddr);
+    pool_init.device_uuid           = producer->device_uuid();
+    pool_init.driver_uuid           = producer->driver_uuid();
+    pool_init.drm_render_major      = producer->drm_render_major();
+    pool_init.drm_render_minor      = producer->drm_render_minor();
+    pool_init.drm_render_fd         = producer->drm_render_fd();
 
-        std::string verr;
-        // Initial pool: zero-copy DEVICE_LOCAL + LINEAR modifier. The
-        // daemon's first `NegotiateBuffers` will rebuild with whatever
-        // (modifier, mem_hint) it picked from `format_caps`, so this
-        // initial allocation is just a placeholder that exists long
-        // enough for the format-caps probe to run on a live image.
-        producer = ww_image::VkProducer::create(
-            opt.width, opt.height, /*flags=*/0,
-            /*modifier=*/0 /* LINEAR */, &verr);
-        if (!producer) die("vk_producer: " + verr);
+    if (int rc = ww_bridge_pool_create(WW_POOL_BACKEND_VULKAN, &pool_init, &host.pool);
+        rc != 0)
+        die("ww_bridge_pool_create failed: " + std::to_string(rc));
 
-        // Donate our `vkGetInstanceProcAddr` to the bridge dispatch
-        // table so the bridge can call into Vulkan helpers (here:
-        // GPU info logger) without linking libvulkan itself.
-        ww_bridge_vk_dt_t bdt {};
-        ww_bridge_vk_dt_load(&bdt, vkGetInstanceProcAddr,
-                             producer->instance());
-        ww_bridge_vk_log_gpu_info("waywallen-image-renderer", &bdt,
-                                  producer->physical_device());
-    }
-
-    // Send Ready *after* device init so the render-node we report is
-    // the one actually backing the producer's slot.
-    const uint32_t drm_major = producer ? producer->drm_render_major() : 0;
-    const uint32_t drm_minor = producer ? producer->drm_render_minor() : 0;
-    if (int rc = ww_bridge_send_ready(host.sock, drm_major, drm_minor); rc != 0)
-        die("send ready failed: " + std::to_string(rc));
-
+    /* Bridge sends ready + release_syncobj + format_caps in one go. */
+    if (int rc = ww_bridge_pool_advertise_caps(host.pool, host.sock,
+                                               opt.width, opt.height,
+                                               WW_MEM_HINT_DEVICE_LOCAL | WW_MEM_HINT_HOST_VISIBLE);
+        rc != 0)
+        die("ww_bridge_pool_advertise_caps failed: " + std::to_string(rc));
     std::fprintf(stderr,
-                 "waywallen-image-renderer: ready image=%s %ux%u "
-                 "drm_render=%u:%u\n",
-                 opt.image_path.empty() ? "(none)" : opt.image_path.c_str(),
-                 opt.width, opt.height, drm_major, drm_minor);
-
-    if (producer) {
-        // Modifier-negotiation v2 — probe the picked physical device's
-        // supported (fourcc, modifier) set + UUID + plane counts and
-        // ship the result to the daemon as `format_caps`. The daemon's
-        // picker pairs this with each consumer's `consumer_caps` to
-        // decide which scheme to land on.
-        ww_image::VkFormatCaps caps {};
-        std::string ferr;
-        if (!producer->query_format_caps(&caps, &ferr))
-            die("query_format_caps: " + ferr);
-
-        ww_format_caps_caller_t m {};
-        m.fourccs            = caps.fourccs.data();
-        m.fourccs_count      = static_cast<uint32_t>(caps.fourccs.size());
-        m.mod_counts         = caps.mod_counts.data();
-        m.mod_counts_count   = static_cast<uint32_t>(caps.mod_counts.size());
-        m.modifiers          = caps.modifiers.data();
-        m.modifiers_count    = static_cast<uint32_t>(caps.modifiers.size());
-        m.usages             = caps.usages.data();
-        m.usages_count       = static_cast<uint32_t>(caps.usages.size());
-        m.plane_counts       = caps.plane_counts.data();
-        m.plane_counts_count = static_cast<uint32_t>(caps.plane_counts.size());
-        m.device_uuid        = caps.device_uuid;
-        m.driver_uuid        = caps.driver_uuid;
-        m.drm_render_major   = drm_major;
-        m.drm_render_minor   = drm_minor;
-        m.mem_hints          = caps.mem_hints;
-        m.sync_caps          = WW_SYNC_SYNCOBJ_TIMELINE | WW_SYNC_SYNCOBJ_BINARY;
-        m.color_caps         = WW_COLOR_ENC_SRGB | WW_COLOR_RANGE_LIMITED
-                             | WW_COLOR_ALPHA_PREMUL;
-        m.extent_max_w       = 16384;
-        m.extent_max_h       = 16384;
-        if (int rc = ww_bridge_send_format_caps_v2(host.sock, &m); rc != 0)
-            die("send format_caps failed: " + std::to_string(rc));
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: sent format_caps "
-                     "(%zu modifiers for ABGR8888)\n",
-                     caps.modifiers.size());
-
-        // Export the producer's release timeline syncobj and ship it
-        // to the daemon BEFORE any frame_ready. The daemon imports it
-        // via DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE on its own render node and
-        // transfers consumer release fences onto each frame_ready's
-        // release_point. Required by ipc_v1: every frame_ready carries
-        // a release_point that names a value on this exact syncobj.
-        std::string rerr;
-        int release_fd = producer->export_release_syncobj_fd(&rerr);
-        if (release_fd < 0)
-            die("export release_syncobj fd: " + rerr);
-        if (int rc = ww_bridge_send_release_syncobj(host.sock, release_fd);
-            rc != 0) {
-            ::close(release_fd);
-            die("send release_syncobj failed: " + std::to_string(rc));
-        }
-        ::close(release_fd);
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: sent release_syncobj\n");
-
-        host.producer    = producer.get();
-        host.rgba_data   = rgba_buf.data.data();
-        host.rgba_size   = rgba_buf.data.size();
-
-        // Iter 3c: NO speculative initial bind. The renderer waits for
-        // the daemon's first `NegotiateBuffers` request before
-        // allocating + binding. The reader thread routes that into
-        // `apply_configure`, which does upload_and_submit +
-        // emit_bind_and_frame_locked.
-        //
-        // Rationale: producer must not allocate a dma-buf before the
-        // daemon has resolved a (fourcc, modifier, mem_hint) scheme
-        // compatible with whoever's consuming. Pre-allocation can
-        // pick a placement no consumer can import, then we burn
-        // memory + force an immediate rebuild.
-        std::fprintf(stderr,
-                     "waywallen-image-renderer: ready, waiting for NegotiateBuffers\n");
-    }
+                 "waywallen-image-renderer: ready, advertised caps, "
+                 "waiting for NegotiateBuffers\n");
 
     std::thread reader([&]() { reader_loop(host); });
 
-    // M0: we don't produce frames yet. Block until shutdown; the reader
-    // thread wakes us via signal_shutdown().
-    {
-        std::unique_lock<std::mutex> lk(host.wake_mu);
-        host.wake_cv.wait(lk, [&] {
-            return host.shutdown.load(std::memory_order_acquire);
+    /* Main loop: drain pending negotiate requests as they come. Static
+     * image: one upload per directive is enough; afterwards we just
+     * wait for shutdown. */
+    while (!host.shutdown.load(std::memory_order_acquire)) {
+        std::unique_lock<std::mutex> lk(host.neg_mu);
+        host.neg_cv.wait(lk, [&] {
+            return host.neg_pending
+                || host.shutdown.load(std::memory_order_acquire);
         });
+        if (host.shutdown.load(std::memory_order_acquire)) break;
+        if (host.neg_pending) {
+            ww_pool_directive_t d = host.neg_directive;
+            host.neg_pending = false;
+            lk.unlock();
+            apply_negotiate_request(host, *producer, d);
+        }
     }
 
     if (reader.joinable()) {
         ::shutdown(host.sock, SHUT_RD);
         reader.join();
     }
+    if (host.pool) ww_bridge_pool_destroy(host.pool);
     ww_bridge_close(host.sock);
     return 0;
 }
