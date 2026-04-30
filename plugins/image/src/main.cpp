@@ -9,6 +9,7 @@
 #include <waywallen-bridge/probe_vk.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -34,6 +35,12 @@ struct Options {
     bool        decode_only { false };
     bool        vulkan_probe { false };
     bool        produce_once { false };
+    // Test hook: probe the picked Vulkan device for supported (fourcc,
+    // modifier) pairs and emit a `PeerCaps`-shaped JSON document on
+    // stdout, then exit. Consumed by the dmabuf_roundtrip_e2e test
+    // orchestrator to compute the producer×consumer cap intersection
+    // before per-pair iteration.
+    bool        print_caps { false };
 };
 
 uint64_t now_ns() {
@@ -75,6 +82,8 @@ Options parse_args(int argc, char** argv) {
             // Test hook: decode --image, upload into one VkProducer slot,
             // export a sync_fd, close fds, exit. No IPC.
             o.produce_once = true;
+        } else if (a == "--print-caps") {
+            o.print_caps = true;
         } else {
             // Swallow unknown --key value pairs forwarded by the daemon from
             // source-plugin metadata (e.g. --fps, --workshop_id for animated
@@ -123,6 +132,86 @@ void signal_shutdown(HostState& s) {
     s.wake_cv.notify_all();
 }
 
+// Test hook: when WAYWALLEN_IMAGE_DUMP_DIR is set, write the RGBA8
+// bytes the renderer is about to upload to the GPU to a file the
+// orchestrator can compare against the consumer-side dump. The dump
+// captures the *input* (post-decode, pre-staging) so it's always
+// linear regardless of the picked DRM modifier — the consumer also
+// dumps post-readback linear bytes, so byte-equality is meaningful.
+//
+// Filename: producer-{seq:06}-0x{fourcc:08x}-0x{modifier:016x}.bin
+// Sidecar:  same name with .json — width/height/stride/fourcc/modifier.
+//
+// Cheap and best-effort: any I/O failure is logged but does not break
+// the renderer (a CI sandbox without write perms shouldn't take down
+// the producer).
+static void maybe_dump_producer_frame(const HostState& s, uint64_t seq) {
+    const char* dir = std::getenv("WAYWALLEN_IMAGE_DUMP_DIR");
+    if (!dir || !*dir) return;
+    if (!s.producer || !s.rgba_data || s.rgba_size == 0) return;
+    const auto& L = s.producer->layout();
+
+    char path[512];
+    std::snprintf(path, sizeof(path),
+                  "%s/producer-%06llu-0x%08x-0x%016llx.bin",
+                  dir,
+                  static_cast<unsigned long long>(seq),
+                  L.drm_fourcc,
+                  static_cast<unsigned long long>(L.drm_modifier));
+    FILE* f = std::fopen(path, "wb");
+    if (!f) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: dump open %s: %s\n",
+                     path, std::strerror(errno));
+        return;
+    }
+    size_t w = std::fwrite(s.rgba_data, 1, s.rgba_size, f);
+    std::fclose(f);
+    if (w != s.rgba_size) {
+        std::fprintf(stderr,
+                     "waywallen-image-renderer: dump short write %zu/%zu to %s\n",
+                     w, s.rgba_size, path);
+        return;
+    }
+
+    char sidecar[520];
+    std::snprintf(sidecar, sizeof(sidecar),
+                  "%s/producer-%06llu-0x%08x-0x%016llx.json",
+                  dir,
+                  static_cast<unsigned long long>(seq),
+                  L.drm_fourcc,
+                  static_cast<unsigned long long>(L.drm_modifier));
+    FILE* sf = std::fopen(sidecar, "w");
+    if (!sf) return;
+    // Note: the dump is always tightly-packed RGBA8 (`width*height*4` bytes)
+    // — that's the input format `decode_to_rgba` produces and what
+    // `upload_and_submit` accepts. The DMA-BUF stride/plane_offset are the
+    // *destination* layout in the GPU buffer, which the consumer reads
+    // back into the same tightly-packed shape; both sides' dumps are
+    // therefore directly comparable.
+    std::fprintf(sf,
+                 "{\n"
+                 "  \"kind\": \"producer\",\n"
+                 "  \"seq\": %llu,\n"
+                 "  \"fourcc\": \"0x%08x\",\n"
+                 "  \"modifier\": \"0x%016llx\",\n"
+                 "  \"width\": %u,\n"
+                 "  \"height\": %u,\n"
+                 "  \"stride\": %u,\n"
+                 "  \"plane_offset\": %u,\n"
+                 "  \"size\": %u,\n"
+                 "  \"row_bytes\": %u,\n"
+                 "  \"row_count\": %u,\n"
+                 "  \"dump_layout\": \"tightly_packed_rgba8\"\n"
+                 "}\n",
+                 static_cast<unsigned long long>(seq),
+                 L.drm_fourcc,
+                 static_cast<unsigned long long>(L.drm_modifier),
+                 L.width, L.height, L.stride, L.plane_offset, L.size,
+                 L.width * 4u, L.height);
+    std::fclose(sf);
+}
+
 // Re-export the producer's current slot, send fresh bind_buffers + a
 // frame_ready that signals the just-uploaded image. Caller must hold
 // `s.send_mu`.
@@ -166,6 +255,7 @@ static bool emit_bind_and_frame_locked(HostState& s, int sync_fd) {
     fr.seq           = s.next_seq++;
     fr.ts_ns         = now_ns();
     fr.release_point = next_release_point;
+    maybe_dump_producer_frame(s, fr.seq);
     int rc = ww_bridge_send_frame_ready(s.sock, &fr, sync_fd);
     ::close(sync_fd);
     if (rc != 0) {
@@ -356,8 +446,81 @@ void reader_loop(HostState& s) {
 // main
 // ---------------------------------------------------------------------------
 
+// Emit a single JSON document on stdout that mirrors the
+// `PeerCapsJson` shape consumed by `dmabuf_roundtrip_e2e`. Hand-rolled
+// (no nlohmann dep) because the schema is tiny and stable. Keep the
+// field names and ordering in sync with
+// `displays/dump-test/src/main.rs::PeerCapsJson`.
+static int print_caps_json(const Options& opt) {
+    std::string verr;
+    auto prod = ww_image::VkProducer::create(opt.width, opt.height,
+                                              /*flags=*/0,
+                                              /*modifier=*/0 /* LINEAR */, &verr);
+    if (!prod) {
+        std::fprintf(stderr, "waywallen-image-renderer: vk_producer: %s\n",
+                     verr.c_str());
+        return 1;
+    }
+    ww_image::VkFormatCaps caps {};
+    std::string ferr;
+    if (!prod->query_format_caps(&caps, &ferr)) {
+        std::fprintf(stderr, "waywallen-image-renderer: query_format_caps: %s\n",
+                     ferr.c_str());
+        return 1;
+    }
+
+    auto put_uuid = [](const uint8_t (&u)[16]) -> std::string {
+        std::string s = "[";
+        for (int i = 0; i < 16; ++i) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%s%u", i ? "," : "", u[i]);
+            s += buf;
+        }
+        s += "]";
+        return s;
+    };
+
+    std::printf("{\n");
+    std::printf("  \"by_fourcc\": {\n");
+    size_t cursor = 0;
+    for (size_t i = 0; i < caps.fourccs.size(); ++i) {
+        const uint32_t fc = caps.fourccs[i];
+        const uint32_t n  = caps.mod_counts[i];
+        std::printf("    \"0x%08x\": [", fc);
+        for (uint32_t j = 0; j < n; ++j) {
+            std::printf("%s\n      {\"modifier\": %llu, \"usage\": %u, \"plane_count\": %u}",
+                        j ? "," : "",
+                        static_cast<unsigned long long>(caps.modifiers[cursor + j]),
+                        caps.usages[cursor + j],
+                        caps.plane_counts[cursor + j]);
+        }
+        cursor += n;
+        std::printf("\n    ]%s\n", (i + 1 < caps.fourccs.size()) ? "," : "");
+    }
+    std::printf("  },\n");
+    std::printf("  \"device_uuid\": %s,\n", put_uuid(caps.device_uuid).c_str());
+    std::printf("  \"driver_uuid\": %s,\n", put_uuid(caps.driver_uuid).c_str());
+    std::printf("  \"drm_render_major\": %u,\n", prod->drm_render_major());
+    std::printf("  \"drm_render_minor\": %u,\n", prod->drm_render_minor());
+    std::printf("  \"sync\": %u,\n",
+                static_cast<unsigned>(WW_SYNC_SYNCOBJ_TIMELINE | WW_SYNC_SYNCOBJ_BINARY));
+    std::printf("  \"color\": %u,\n",
+                static_cast<unsigned>(WW_COLOR_ENC_SRGB | WW_COLOR_RANGE_LIMITED
+                                       | WW_COLOR_ALPHA_PREMUL));
+    std::printf("  \"mem_hint\": %u,\n", caps.mem_hints);
+    std::printf("  \"extent_max_w\": %u,\n", 16384u);
+    std::printf("  \"extent_max_h\": %u\n",  16384u);
+    std::printf("}\n");
+    std::fflush(stdout);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     Options opt = parse_args(argc, argv);
+
+    if (opt.print_caps) {
+        return print_caps_json(opt);
+    }
 
     if (opt.vulkan_probe) {
         std::string verr;
