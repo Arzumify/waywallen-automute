@@ -638,7 +638,18 @@ impl RendererManager {
             // SAFETY: drm_device() returned Ok above; it caches the
             // device and is idempotent.
             let drm = crate::sync::drm_device().expect("checked above");
-            crate::sync::spawn_reaper(drm, handle.clone(), frame_rx);
+            // Pass only the renderer id and a clone of the
+            // release_syncobj Arc — NOT Arc<RendererHandle>. The handle
+            // owns the channel's Sender; if the reaper held an Arc to
+            // it, the channel would never close (self-referential
+            // cycle), the reaper task would leak, and pending buckets
+            // would tie up DRM syncobjs forever.
+            crate::sync::spawn_reaper(
+                drm,
+                id.clone(),
+                Arc::clone(&handle.release_syncobj),
+                frame_rx,
+            );
         }
 
         {

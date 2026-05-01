@@ -36,13 +36,13 @@
 //! daemon-side handle on the first flushed bucket and cached.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::renderer_manager::RendererHandle;
 use crate::sync::drm_syncobj::{DrmDevice, SyncobjHandle};
 
 /// Maximum age of a bucket before it gets force-flushed even if not
@@ -83,10 +83,10 @@ struct Bucket {
 
 pub fn spawn_reaper(
     drm: &'static DrmDevice,
-    renderer: Arc<RendererHandle>,
+    renderer_id: String,
+    release_syncobj: Arc<StdMutex<Option<OwnedFd>>>,
     mut rx: mpsc::UnboundedReceiver<FrameRecord>,
 ) {
-    let renderer_id = renderer.id.clone();
     tokio::spawn(async move {
         let mut producer_handle: Option<SyncobjHandle> = None;
         let mut buckets: HashMap<u64, Bucket> = HashMap::new();
@@ -99,13 +99,21 @@ pub fn spawn_reaper(
             tokio::select! {
                 maybe_record = rx.recv() => {
                     let Some(record) = maybe_record else {
-                        // Channel closed (renderer evicted). Force-flush
-                        // remaining buckets so we don't strand any
-                        // consumer handles, then exit.
-                        for (point, bucket) in buckets.drain() {
-                            flush_bucket(drm, &renderer, &mut producer_handle, point, bucket).await;
+                        // Channel closed: every Sender clone (i.e. the
+                        // RendererHandle) is gone, so the renderer has
+                        // been evicted. The producer's release_syncobj
+                        // timeline is no longer being waited on — just
+                        // drop pending buckets so their consumer handles
+                        // hit DESTROY without spending WAIT_TIMEOUT each
+                        // on signals that will never arrive.
+                        if !buckets.is_empty() {
+                            log::info!(
+                                "reaper {renderer_id}: channel closed with {} pending bucket(s); dropping",
+                                buckets.len(),
+                            );
                         }
-                        log::info!("reaper {renderer_id}: channel closed, exiting");
+                        drop(buckets);
+                        log::info!("reaper {renderer_id}: exiting");
                         return;
                     };
                     let Some(consumer_handle) = record.consumer_handle else {
@@ -114,7 +122,7 @@ pub fn spawn_reaper(
                         // so its back-pressure wait at this point doesn't
                         // hang forever.
                         advance_release_point(
-                            drm, &renderer, &mut producer_handle,
+                            drm, &renderer_id, &release_syncobj, &mut producer_handle,
                             record.release_point,
                         ).await;
                         continue;
@@ -135,7 +143,7 @@ pub fn spawn_reaper(
                     entry.handles.push(consumer_handle);
                     if entry.handles.len() as u32 >= entry.expected {
                         let bucket = buckets.remove(&record.release_point).unwrap();
-                        flush_bucket(drm, &renderer, &mut producer_handle, record.release_point, bucket).await;
+                        flush_bucket(drm, &renderer_id, &release_syncobj, &mut producer_handle, record.release_point, bucket).await;
                     }
                 }
                 _ = sleep_until_or_pending(next_deadline) => {
@@ -156,7 +164,7 @@ pub fn spawn_reaper(
                             bucket.handles.len(),
                             bucket.expected,
                         );
-                        flush_bucket(drm, &renderer, &mut producer_handle, point, bucket).await;
+                        flush_bucket(drm, &renderer_id, &release_syncobj, &mut producer_handle, point, bucket).await;
                     }
                 }
             }
@@ -173,35 +181,48 @@ async fn sleep_until_or_pending(deadline: Option<Instant>) {
     }
 }
 
+/// Dup the producer's release_syncobj fd out of the shared
+/// `Mutex<Option<OwnedFd>>` slot. Mirrors the equivalent helper on
+/// `RendererHandle` but without depending on the handle type — keeps
+/// the reaper free of any `Arc<RendererHandle>` reference (which used
+/// to form a self-keeping cycle through the Sender side of its own
+/// channel).
+fn dup_release_syncobj_fd(slot: &StdMutex<Option<OwnedFd>>) -> Option<OwnedFd> {
+    let guard = slot.lock().ok()?;
+    let fd = guard.as_ref()?;
+    let dup_raw = nix::unistd::dup(fd.as_raw_fd()).ok()?;
+    // SAFETY: nix::unistd::dup returned a fresh fd we now own.
+    Some(unsafe { OwnedFd::from_raw_fd(dup_raw) })
+}
+
 /// Lazy-import the producer's release_syncobj into our handle cache.
 /// Returns true if `producer_handle` is `Some` after this call.
 fn ensure_producer_handle(
     drm: &'static DrmDevice,
-    renderer: &Arc<RendererHandle>,
+    renderer_id: &str,
+    release_syncobj: &StdMutex<Option<OwnedFd>>,
     producer_handle: &mut Option<SyncobjHandle>,
     release_point: u64,
 ) -> bool {
     if producer_handle.is_some() {
         return true;
     }
-    let Some(fd) = renderer.clone_release_syncobj_fd() else {
+    let Some(fd) = dup_release_syncobj_fd(release_syncobj) else {
         log::warn!(
-            "reaper {}: dropping point {release_point} — \
-             producer hasn't sent ReleaseSyncobj yet",
-            renderer.id
+            "reaper {renderer_id}: dropping point {release_point} — \
+             producer hasn't sent ReleaseSyncobj yet"
         );
         return false;
     };
     match drm.fd_to_handle(&fd) {
         Ok(h) => {
             *producer_handle = Some(h);
-            log::info!("reaper {}: imported release_syncobj", renderer.id);
+            log::info!("reaper {renderer_id}: imported release_syncobj");
             true
         }
         Err(e) => {
             log::warn!(
-                "reaper {}: DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE failed: {e}",
-                renderer.id
+                "reaper {renderer_id}: DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE failed: {e}"
             );
             false
         }
@@ -215,11 +236,12 @@ fn ensure_producer_handle(
 /// immediately rather than timing out.
 async fn advance_release_point(
     drm: &'static DrmDevice,
-    renderer: &Arc<RendererHandle>,
+    renderer_id: &str,
+    release_syncobj: &StdMutex<Option<OwnedFd>>,
     producer_handle: &mut Option<SyncobjHandle>,
     release_point: u64,
 ) {
-    if !ensure_producer_handle(drm, renderer, producer_handle, release_point) {
+    if !ensure_producer_handle(drm, renderer_id, release_syncobj, producer_handle, release_point) {
         return;
     }
     let producer = producer_handle.as_ref().expect("set above");
@@ -228,23 +250,20 @@ async fn advance_release_point(
         Ok(h) => h,
         Err(e) => {
             log::warn!(
-                "reaper {}: advance point {release_point}: create_binary_syncobj: {e}",
-                renderer.id
+                "reaper {renderer_id}: advance point {release_point}: create_binary_syncobj: {e}"
             );
             return;
         }
     };
     if let Err(e) = drm.signal(&placeholder) {
         log::warn!(
-            "reaper {}: advance point {release_point}: SIGNAL: {e}",
-            renderer.id
+            "reaper {renderer_id}: advance point {release_point}: SIGNAL: {e}"
         );
         return;
     }
     if let Err(e) = drm.transfer(&placeholder, 0, producer, release_point) {
         log::warn!(
-            "reaper {}: advance point {release_point}: TRANSFER: {e}",
-            renderer.id
+            "reaper {renderer_id}: advance point {release_point}: TRANSFER: {e}"
         );
     }
     // `placeholder` drops here → DESTROY ioctl. Producer timeline
@@ -257,7 +276,8 @@ async fn advance_release_point(
 /// lazily on first call, caches in `producer_handle`.
 async fn flush_bucket(
     drm: &'static DrmDevice,
-    renderer: &Arc<RendererHandle>,
+    renderer_id: &str,
+    release_syncobj: &StdMutex<Option<OwnedFd>>,
     producer_handle: &mut Option<SyncobjHandle>,
     release_point: u64,
     mut bucket: Bucket,
@@ -266,13 +286,12 @@ async fn flush_bucket(
         return;
     }
 
-    if !ensure_producer_handle(drm, renderer, producer_handle, release_point) {
+    if !ensure_producer_handle(drm, renderer_id, release_syncobj, producer_handle, release_point) {
         return;
     }
     let producer = producer_handle.as_ref().expect("set above");
 
     // 1+2. Wait for all consumer signals; force-signal stragglers.
-    let renderer_id = renderer.id.clone();
     // wait_handles_signaled wants ABSOLUTE CLOCK_MONOTONIC.
     // Compute now + WAIT_TIMEOUT in nsec.
     let timeout_nsec = {
