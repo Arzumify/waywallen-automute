@@ -2,13 +2,12 @@ module;
 #include "QExtra/macro_qt.hpp"
 
 #ifdef Q_MOC_RUN
+// MOC's preprocessor needs the `Q_DECLARE_INTERFACE` macro for
+// `Q_INTERFACES(QQmlParserStatus)` below. The actual compile gets the
+// type via `import qextra`, so this only fires under MOC.
 #    include "waywallen/thumb/service.moc"
+#    include <QtQml/QQmlParserStatus>
 #endif
-
-// QThreadPool is not exported by qextra's `qt` module; bring it in
-// via the global module fragment. Other Qt types (QObject, QString,
-// QHash, QPointer, QList, QQmlEngine, QJSEngine) come from `import qextra`.
-#include <QtCore/QThreadPool>
 
 export module waywallen:thumb.service;
 export import qextra;
@@ -17,6 +16,38 @@ namespace waywallen
 {
 
 export class ThumbnailRequest;
+
+/// Worker job (module-private). QObject-derived so it can emit a
+/// type-safe `finished` signal back to the service via a queued
+/// connection — no QPointer + QMetaObject::invokeMethod plumbing.
+class ThumbnailJob : public QObject, public QRunnable {
+    Q_OBJECT
+public:
+    ThumbnailJob(QString key,
+                 QString cache_path,
+                 bool    is_video,
+                 qint64  src_mtime,
+                 qint64  src_size);
+
+    void run() override;
+
+Q_SIGNALS:
+    /// Emitted from the worker thread when decoding + cache write
+    /// settle. `state` is a `ThumbnailRequest::State` value (`Ready`
+    /// or `Failed`); `cache_path` is filled on success, `error` on
+    /// failure.
+    void finished(const QString& key,
+                  int            state,
+                  const QString& cache_path,
+                  const QString& error);
+
+private:
+    QString m_key;
+    QString m_cache_path;
+    bool    m_is_video;
+    qint64  m_src_mtime;
+    qint64  m_src_size;
+};
 
 /// Background thumbnail generator. Resolves cache hits from
 /// `$XDG_CACHE_HOME/thumbnails/x-large/` per the freedesktop Thumbnail
@@ -34,11 +65,15 @@ public:
     static auto    instance() -> ThumbnailService*;
     static auto    create(QQmlEngine*, QJSEngine*) -> ThumbnailService*;
 
-    /// Submit a request. Service stores a `QPointer` to `req` and
-    /// invokes back via queued connection on completion. Calling
-    /// `submit` again with the same `req` after its source/wpType
-    /// changes is the supported way to re-issue.
-    void submit(ThumbnailRequest* req);
+    /// Submit a cache-miss decode job. The Request resolves cache-hit
+    /// and file-not-found cases synchronously before reaching here, so
+    /// this entry point only handles the actual worker dispatch.
+    void submit(ThumbnailRequest* req,
+                const QString&    job_path,
+                const QString&    cache_path,
+                bool              is_video,
+                qint64            src_mtime,
+                qint64            src_size);
     /// Drop any pending subscription for `req` (e.g. on destruction).
     void cancel(ThumbnailRequest* req);
 
@@ -54,25 +89,32 @@ private:
     QThreadPool             m_pool;
     QHash<QString, Pending> m_pending; // key = absolute job_path
 
-    Q_INVOKABLE void onJobFinished(const QString& key,
-                                   int            state,
-                                   const QString& cache_path,
-                                   const QString& error);
+    void onJobFinished(const QString& key,
+                       int            state,
+                       const QString& cache_path,
+                       const QString& error);
 };
 
 /// Per-card request handle. QML hosts one of these inside
 /// `ThumbnailImage.qml`; on `source` / `resource` / `wpType` change it
 /// re-submits to `ThumbnailService` and updates `state` / `cachePath`
 /// from the worker's result.
-export class ThumbnailRequest : public QObject {
+///
+/// Implements `QQmlParserStatus` so that initial property bindings
+/// don't fire one submit per setter — `componentComplete()` runs
+/// `scheduleSubmit()` exactly once after all initial properties are
+/// settled. Cache-hit and file-not-found cases resolve synchronously
+/// without involving the service's thread pool.
+export class ThumbnailRequest : public QObject, public QQmlParserStatus {
     Q_OBJECT
+    Q_INTERFACES(QQmlParserStatus)
     QML_ELEMENT
 
     Q_PROPERTY(QString source     READ source    WRITE setSource    NOTIFY sourceChanged    FINAL)
     Q_PROPERTY(QString resource   READ resource  WRITE setResource  NOTIFY resourceChanged  FINAL)
     Q_PROPERTY(QString wpType     READ wpType    WRITE setWpType    NOTIFY wpTypeChanged    FINAL)
     Q_PROPERTY(State   state      READ state                        NOTIFY stateChanged     FINAL)
-    Q_PROPERTY(QString cachePath  READ cachePath                    NOTIFY cachePathChanged FINAL)
+    Q_PROPERTY(QUrl    cachePath  READ cachePath                    NOTIFY cachePathChanged FINAL)
     Q_PROPERTY(QString error      READ error                        NOTIFY errorChanged     FINAL)
 
 public:
@@ -92,11 +134,15 @@ public:
     void setWpType(const QString& v);
 
     auto state() const -> State { return m_state; }
-    auto cachePath() const -> const QString& { return m_cache_path; }
+    auto cachePath() const -> const QUrl& { return m_cache_path; }
     auto error() const -> const QString& { return m_error; }
 
+    // QQmlParserStatus
+    void classBegin() override;
+    void componentComplete() override;
+
     // Service callback (gui thread).
-    void _applyResult(State state, QString cache_path, QString error);
+    void _applyResult(State state, QUrl cache_path, QString error);
 
 Q_SIGNALS:
     void sourceChanged();
@@ -107,18 +153,31 @@ Q_SIGNALS:
     void errorChanged();
 
 private:
+    struct ResolvedJob {
+        QString job_path;
+        QString cache_path;
+        bool    is_video { false };
+        qint64  src_mtime { 0 };
+        qint64  src_size { 0 };
+    };
+
+    /// Resolve from current properties without touching the thread
+    /// pool. Returns true if `state` was driven to Ready or Failed
+    /// directly; returns false on a cache miss and fills `out` with
+    /// the parameters the caller must hand to the service.
+    bool tryResolveSync(ResolvedJob& out);
+
     void scheduleSubmit();
     void setStateInternal(State s);
-    void setCachePathInternal(const QString& p);
+    void setCachePathInternal(const QUrl& p);
     void setErrorInternal(const QString& e);
 
     QString m_source;
     QString m_resource;
     QString m_wp_type;
     State   m_state { Idle };
-    QString m_cache_path;
+    QUrl    m_cache_path;
     QString m_error;
-    bool    m_init_done { false };
 };
 
 } // namespace waywallen

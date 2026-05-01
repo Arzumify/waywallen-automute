@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 pragma ValueTypeBehavior: Assertable
 import QtQuick
 import waywallen.ui as W
@@ -6,10 +7,9 @@ import waywallen.ui as W
 //
 // Drives a `W.ThumbnailRequest` from the given `source`/`resource`/`wpType`
 // (`source` is the daemon-supplied preview path; `resource` is the original
-// media path used as a video fallback when `source` is empty). A `Loader`
-// switches between the loading / ready / failed components as the request
-// state advances. Customise `loadingComponent` and `failedComponent` from
-// the call site to tailor the placeholder UX without subclassing.
+// media path used as a video fallback when `source` is empty). The Image
+// binds directly to `req.cachePath` — empty while Loading, populated once
+// the worker (or sync cache hit) settles.
 Item {
     id: root
 
@@ -17,8 +17,6 @@ Item {
     property string resource
     property string wpType
     property int    fillMode: Image.PreserveAspectFit
-    property Component loadingComponent: defaultLoading
-    property Component failedComponent : defaultFailed
     readonly property int state: req.state
     readonly property string cachePath: req.cachePath
 
@@ -29,21 +27,11 @@ Item {
         wpType  : root.wpType
     }
 
-    Loader {
+    Image {
         anchors.fill: parent
-        sourceComponent: req.state === W.ThumbnailRequest.Ready  ? readyComp
-                       : req.state === W.ThumbnailRequest.Failed ? root.failedComponent
-                       :                                           root.loadingComponent
+        source: req.cachePath
+        fillMode: root.fillMode
+        asynchronous: true
+        cache: true
     }
-
-    Component {
-        id: readyComp
-        Image {
-            source: req.cachePath ? "file://" + req.cachePath : ""
-            fillMode: root.fillMode
-            asynchronous: false
-        }
-    }
-    Component { id: defaultLoading; Item {} }
-    Component { id: defaultFailed;  Item {} }
 }
