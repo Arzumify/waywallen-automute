@@ -188,30 +188,26 @@ EXTRA_QT_PLUGINS="wayland-decoration-client;wayland-shell-integration" \
     --icon-file "$ICON_FILE" \
     --custom-apprun "$APPRUN_TMP"
 
-# ---- 8. Drop unused QuickControls2 style libraries ----
-step "Pruning unused QuickControls2 styles"
-prune_glob() {
-    local lib_root pattern
-    lib_root="$1"
-    pattern="$2"
-    find "$lib_root" -maxdepth 1 -type f -name "$pattern" -print -delete 2>/dev/null || true
-}
-for libdir in "$APPDIR/usr/lib" "$APPDIR/usr/lib64"; do
-    [[ -d "$libdir" ]] || continue
-    for pat in \
-        'libQt6QuickControls2Basic*' \
-        'libQt6QuickControls2F*' \
-        'libQt6QuickControls2Imagine*' \
-        'libQt6QuickControls2Material*' \
-        'libQt6QuickControls2Universal*'; do
-        prune_glob "$libdir" "$pat"
-    done
-done
 cp -rv "$CONDA_PREFIX/lib/qt6/plugins/wayland-graphics-integration-client" "$APPDIR/usr/plugins/"
 cp -v "$CONDA_PREFIX/lib/libstdc++.so.6" "$APPDIR/usr/lib/"
 cp -v "$CONDA_PREFIX/lib/libgcc_s.so.1" "$APPDIR/usr/lib/"
 cp -rv "$APPDIR/usr/lib/qt6/qml/." "$APPDIR/usr/qml/"
 rm -rf "$APPDIR/usr/lib/qt6"
+
+# ---- 8. Drop unused QuickControls2 styles (native libs + QML modules) ----
+step "Pruning unused QuickControls2 styles"
+# Each name targets BOTH:
+#   usr/lib/libQt6QuickControls2<Style>*.so*    (style + StyleImpl shared libs)
+#   usr/qml/QtQuick/Controls/<Style>/           (QML module dir for the style)
+QUICKCONTROLS2_PRUNE=(Basic Fusion FluentWinUI3 Imagine Material Universal designer)
+for style in "${QUICKCONTROLS2_PRUNE[@]}"; do
+    for libdir in "$APPDIR/usr/lib" "$APPDIR/usr/lib64"; do
+        [[ -d "$libdir" ]] || continue
+        find "$libdir" -maxdepth 1 -type f \
+            -name "libQt6QuickControls2${style}*.so*" -print -delete 2>/dev/null || true
+    done
+    rm -rfv "$APPDIR/usr/qml/QtQuick/Controls/${style}" 2>/dev/null || true
+done
 
 # ---- 9. Pack the AppImage ----
 step "Packing AppImage"
