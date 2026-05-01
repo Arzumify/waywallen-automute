@@ -1,0 +1,73 @@
+name: Build AppImage
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      WAYWALLEN_CONDA_ENV: waywallen
+    steps:
+      - name: Install OS prereqs
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates git bzip2 file xz-utils \
+            build-essential pkg-config \
+            libfuse2 libxkbcommon0 libgl1 libegl1 \
+            libglib2.0-0
+
+      - uses: actions/checkout@v4
+
+      - name: Install Miniconda
+        run: |
+          curl -fsSL -o /tmp/miniconda.sh \
+            https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+          bash /tmp/miniconda.sh -b -p "$HOME/miniconda"
+          echo "$HOME/miniconda/bin" >> "$GITHUB_PATH"
+          echo "$HOME/miniconda/condabin" >> "$GITHUB_PATH"
+
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/miniconda/envs/waywallen
+          key: conda-${{ runner.os }}-${{ hashFiles('environment.yml') }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/clang-release/cargo
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'displays/*/Cargo.toml') }}
+
+      - name: Build AppImage
+        run: bash ./scripts/build_appimage.sh
+
+      - name: Sanity-check AppImage
+        run: |
+          file waywallen-x86_64.AppImage
+          ./waywallen-x86_64.AppImage --appimage-extract-and-run --help 2>&1 | tee /tmp/usage.txt
+          grep -q "usage: waywallen" /tmp/usage.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: waywallen-x86_64.AppImage
+          path: waywallen-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: waywallen-x86_64.AppImage
