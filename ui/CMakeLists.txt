@@ -38,6 +38,12 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchDeps.cmake)
 fetchdeps(${CMAKE_CURRENT_SOURCE_DIR}/deps.json)
 
+# Shared C++ ffmpeg middle layer (provides waywallen::ffmpeg for the UI's
+# thumbnail generator and, in future, an ffmpeg-based renderer plugin).
+# Added here because rstd::rstd must already exist via fetchdeps above.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../libs/ffmpeg
+                 ${CMAKE_BINARY_DIR}/waywallen-ffmpeg)
+
 qt_standard_project_setup()
 
 # ---------------------------------------------------------------------------
@@ -72,6 +78,7 @@ set(SOURCES_NO_MOC
   src/query/health_query.cpp
   src/query/display_query.cpp
   src/query/library_query.cpp
+  src/thumb/service.cpp
 )
 
 set(SOURCES
@@ -96,6 +103,7 @@ set(MOC_SOURCE_FILES
   src/query/health_query.cppm
   src/query/display_query.cppm
   src/query/library_query.cppm
+  src/thumb/service.cppm
 )
 set(MODULES
     src/mod.cppm
@@ -110,6 +118,7 @@ set(QML_FILES
   qml/Window.qml
   qml/component/StatusDot.qml
   qml/component/PagePopup.qml
+  qml/component/ThumbnailImage.qml
   qml/page/WallpaperPage.qml
   qml/page/WallpaperCard.qml
   qml/page/StatusPage.qml
@@ -202,6 +211,7 @@ target_link_libraries(waywallen-qml
     qml_material::qml_material
     ncrequest
     qextra
+    waywallen::ffmpeg
 )
 
 qt_add_executable(${PROJECT_NAME} MANUAL_FINALIZATION src/main.cpp)

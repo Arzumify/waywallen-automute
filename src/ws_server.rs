@@ -1110,13 +1110,23 @@ fn entry_to_pb(
         .and_then(|m| m.format.clone())
         .or_else(|| e.format.clone())
         .unwrap_or_default();
+    let preview = db_meta
+        .and_then(|m| m.preview_path.as_deref())
+        .map(|rel| {
+            std::path::Path::new(&e.library_root)
+                .join(rel)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .or_else(|| e.preview.clone().filter(|s| !s.is_empty()))
+        .unwrap_or_default();
 
     pb::WallpaperEntry {
         id: e.id.clone(),
         name: e.name.clone(),
         wp_type: e.wp_type.clone(),
         resource: e.resource.clone(),
-        preview: e.preview.clone().unwrap_or_default(),
+        preview,
         metadata: e.metadata.clone(),
         size,
         width,

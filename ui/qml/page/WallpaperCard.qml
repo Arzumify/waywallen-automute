@@ -25,12 +25,13 @@ MD.ListGridBaseDelegate {
             spacing: 0
 
             // Preview thumbnail
-            Image {
+            W.ThumbnailImage {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.margins: 0
-                visible: !!root.wallpaper?.preview
-                source: root.wallpaper?.preview ? "file://" + root.wallpaper.preview : ""
+                source  : root.wallpaper?.preview ?? ""
+                resource: root.wallpaper?.resource ?? ""
+                wpType  : root.wallpaper?.wpType ?? ""
                 fillMode: Image.PreserveAspectFit
             }
 

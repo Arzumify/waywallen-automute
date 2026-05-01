@@ -225,12 +225,16 @@ MD.Page {
                     spacing: 0
 
                     // Preview
-                    Image {
+                    W.ThumbnailImage {
                         Layout.fillWidth: true
                         Layout.preferredHeight: visible ? 200 : 0
                         Layout.margins: 12
-                        visible: root.selectedWallpaper?.preview !== undefined && root.selectedWallpaper?.preview !== ""
-                        source: root.selectedWallpaper?.preview ? "file://" + root.selectedWallpaper.preview : ""
+                        visible: (root.selectedWallpaper?.preview ?? "") !== ""
+                                 || (root.selectedWallpaper?.wpType === "video"
+                                     && (root.selectedWallpaper?.resource ?? "") !== "")
+                        source  : root.selectedWallpaper?.preview ?? ""
+                        resource: root.selectedWallpaper?.resource ?? ""
+                        wpType  : root.selectedWallpaper?.wpType ?? ""
                         fillMode: Image.PreserveAspectFit
                     }
 
