@@ -106,7 +106,11 @@ static const uint32_t kCandidateFourccs[] = {
     WW_DRM_FORMAT_RGBX8888, WW_DRM_FORMAT_BGRX8888,
 };
 
-#define DRM_FORMAT_MOD_LINEAR 0ULL
+#define DRM_FORMAT_MOD_LINEAR  0ULL
+/* drm_fourcc.h: ((1ULL<<56)-1). The kernel sentinel for "no modifier
+ * tagged" — gbm_bo_get_modifier returns this for bo's allocated via
+ * the non-modifier-aware gbm_bo_create() path (USE_LINEAR/USE_SCANOUT). */
+#define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
 
 static int load_gl_dispatch(egl_gbm_state_t *st,
                             ww_bridge_egl_get_proc_addr_fn get_proc) {
@@ -484,7 +488,21 @@ static int alloc_slot(ww_pool_t *pool, uint32_t slot_index,
     for (int p = gbm_planes; p < WW_POOL_MAX_PLANES; ++p) {
         out->fds[p] = -1;
     }
-    out->modifier = actual_mod;
+    /* gbm_bo_get_modifier returns DRM_FORMAT_MOD_INVALID
+     * (((1ULL<<56)-1) = 0x00ffffffffffffff) for bo's allocated via the
+     * non-modifier-aware path — i.e. gbm_bo_create(USE_LINEAR | USE_RENDERING),
+     * which is exactly the linear_path branch above. Reporting INVALID on
+     * the wire poisons the consumer: it would feed INVALID into
+     * vkCreateImage(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+     * drmFormatModifier=...), which Vulkan's spec doesn't define for
+     * INVALID, and radv ends up with a layout that mismatches the
+     * actual buffer → blit GPUVM fault. We know what we asked for —
+     * substitute LINEAR (== d->modifier on the linear_path; for the
+     * tiled path d->modifier is the requested tile, also a sane
+     * fallback if gbm couldn't tell us). */
+    out->modifier = (actual_mod == DRM_FORMAT_MOD_INVALID)
+                  ? d->modifier
+                  : actual_mod;
     return 0;
 }
 
