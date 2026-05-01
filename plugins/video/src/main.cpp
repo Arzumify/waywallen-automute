@@ -48,6 +48,7 @@ struct Options {
     uint32_t    width  { 1280 };
     uint32_t    height { 720 };
     bool        loop_file { true };
+    bool        selftest { false };
 };
 
 [[noreturn]] void die(const std::string& msg) {
@@ -66,6 +67,7 @@ Options parse_args(int argc, char** argv) {
         if (a == "--ipc")              o.ipc_path = next();
         else if (a == "--no-loop")     o.loop_file = false;
         else if (a == "--render-node") o.render_node = next();
+        else if (a == "--selftest")    { o.selftest = true; o.video_path = next(); }
         else if (a == "--width" || a == "--height" || a == "--video"
                  || a == "--path" || a == "--fps") {
             (void)next();
@@ -181,6 +183,151 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
     }
 }
 
+// --selftest: open a video, decode one frame, run YuvToRgba against a
+// throw-away VkImage we allocate ourselves. Validates that the GPU
+// pipeline (device, shader compile/load, descriptor set, queue submit)
+// works on this box before relying on the renderer in a real shell. No
+// IPC, no daemon — strictly local. Returns 0 on success.
+int run_selftest(const Options& opt) {
+    if (opt.video_path.empty()) {
+        std::fprintf(stderr,
+                     "waywallen-video-renderer: --selftest needs a video path\n");
+        return 1;
+    }
+
+    uint32_t even_w = opt.width  + (opt.width  & 1u);
+    uint32_t even_h = opt.height + (opt.height & 1u);
+
+    std::string verr;
+    auto producer = waywallen::ffvk::Producer::create_with_render_node(
+        even_w, even_h, opt.render_node, &verr);
+    if (!producer) { std::fprintf(stderr, "selftest vk: %s\n", verr.c_str()); return 1; }
+    auto yuv = waywallen::ffvk::YuvToRgba::create(
+        producer->instance(), producer->physical_device(), producer->device(),
+        producer->queue_family_index(), producer->queue(),
+        even_w, even_h, &verr);
+    if (!yuv) { std::fprintf(stderr, "selftest yuv: %s\n", verr.c_str()); return 1; }
+
+    waywallen::ffvk::DecodeError derr;
+    auto decoder = waywallen::ffvk::VideoDecoder::open_with_vk(
+        opt.video_path, even_w, even_h, /*loop=*/false, *producer, &derr);
+    if (!decoder) {
+        std::fprintf(stderr, "selftest decode: %s\n", derr.message.c_str());
+        return 1;
+    }
+
+    /* Allocate a private RGBA8 VkImage to convert into. */
+    VkImage         dst_img = VK_NULL_HANDLE;
+    VkDeviceMemory  dst_mem = VK_NULL_HANDLE;
+    {
+        VkImageCreateInfo ici {};
+        ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = VK_FORMAT_R8G8B8A8_UNORM;
+        ici.extent        = { even_w, even_h, 1 };
+        ici.mipLevels     = 1;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT
+                          | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(producer->device(), &ici, nullptr, &dst_img) != VK_SUCCESS) {
+            std::fprintf(stderr, "selftest vkCreateImage failed\n");
+            return 1;
+        }
+        VkMemoryRequirements mr {};
+        vkGetImageMemoryRequirements(producer->device(), dst_img, &mr);
+        VkPhysicalDeviceMemoryProperties mp {};
+        vkGetPhysicalDeviceMemoryProperties(producer->physical_device(), &mp);
+        uint32_t type = UINT32_MAX;
+        for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+            if ((mr.memoryTypeBits & (1u << i))
+                && (mp.memoryTypes[i].propertyFlags
+                    & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                type = i; break;
+            }
+        }
+        if (type == UINT32_MAX) {
+            std::fprintf(stderr, "selftest no DEVICE_LOCAL memory\n");
+            return 1;
+        }
+        VkMemoryAllocateInfo mai {};
+        mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize  = mr.size;
+        mai.memoryTypeIndex = type;
+        if (vkAllocateMemory(producer->device(), &mai, nullptr, &dst_mem) != VK_SUCCESS
+            || vkBindImageMemory(producer->device(), dst_img, dst_mem, 0) != VK_SUCCESS) {
+            std::fprintf(stderr, "selftest vkAllocateMemory/Bind failed\n");
+            return 1;
+        }
+    }
+
+    /* Decode one frame, convert it. */
+    int sync_fd = -1;
+    if (decoder->using_vk_frames()) {
+        waywallen::ffvk::VkFrameView vkv {};
+        auto fs = decoder->next_vk_frame(vkv, &derr);
+        if (fs != waywallen::ffvk::FrameStatus::ok) {
+            std::fprintf(stderr, "selftest next_vk_frame: %s\n", derr.message.c_str());
+            return 1;
+        }
+        const auto cm = waywallen::ffvk::make_color_matrix(
+            static_cast<waywallen::ffvk::ColorSpace>(vkv.colorspace),
+            static_cast<waywallen::ffvk::ColorRange>(vkv.color_range));
+        waywallen::ffvk::YuvToRgba::VkFrameImports im {};
+        im.y_image          = vkv.img[0];
+        im.uv_image         = vkv.plane_count > 1 ? vkv.img[1] : VK_NULL_HANDLE;
+        im.y_sem            = vkv.sem[0];
+        im.uv_sem           = vkv.plane_count > 1 ? vkv.sem[1] : vkv.sem[0];
+        im.y_sem_val_in_out  = &vkv.sem_value[0];
+        im.uv_sem_val_in_out = vkv.plane_count > 1 ? &vkv.sem_value[1] : &vkv.sem_value[0];
+        im.y_layout_in_out   = &vkv.layout[0];
+        im.uv_layout_in_out  = vkv.plane_count > 1 ? &vkv.layout[1] : &vkv.layout[0];
+        im.y_qf_in_out       = &vkv.queue_family[0];
+        im.uv_qf_in_out      = vkv.plane_count > 1 ? &vkv.queue_family[1] : &vkv.queue_family[0];
+        im.src_w             = vkv.width;
+        im.src_h             = vkv.height;
+        im.bit_depth         = vkv.bit_depth;
+        std::string yerr;
+        sync_fd = yuv->convert_av_vk_frame(im, dst_img, even_w, even_h, cm, &yerr);
+        if (sync_fd < 0) std::fprintf(stderr, "selftest convert: %s\n", yerr.c_str());
+    } else {
+        waywallen::ffvk::Nv12Frame frame;
+        auto fs = decoder->next_frame(frame, &derr);
+        if (fs != waywallen::ffvk::FrameStatus::ok) {
+            std::fprintf(stderr, "selftest next_frame: %s\n", derr.message.c_str());
+            return 1;
+        }
+        const auto cm = waywallen::ffvk::make_color_matrix(
+            static_cast<waywallen::ffvk::ColorSpace>(frame.colorspace),
+            static_cast<waywallen::ffvk::ColorRange>(frame.color_range));
+        std::string yerr;
+        sync_fd = yuv->convert_nv12(dst_img, even_w, even_h,
+                                    frame.data.data(), frame.data.size(),
+                                    cm, &yerr);
+        if (sync_fd < 0) std::fprintf(stderr, "selftest convert: %s\n", yerr.c_str());
+    }
+
+    /* Wait for the conversion to complete via the sync_fd. We can poll
+     * the fd with poll(2) since SYNC_FD is a kernel sync_file. */
+    if (sync_fd >= 0) {
+        ::close(sync_fd);
+    }
+    vkDeviceWaitIdle(producer->device());
+    vkDestroyImage(producer->device(), dst_img, nullptr);
+    vkFreeMemory(producer->device(), dst_mem, nullptr);
+
+    if (sync_fd < 0) return 1;
+    std::fprintf(stderr,
+                 "waywallen-video-renderer: --selftest ok "
+                 "(mode=%s, %ux%u)\n",
+                 decoder->using_vk_frames() ? "shared-vk" : "sw",
+                 even_w, even_h);
+    return 0;
+}
+
 void reader_loop(HostState& host) {
     while (!host.shutdown.load(std::memory_order_acquire)) {
         ww_bridge_control_t msg {};
@@ -203,6 +350,7 @@ void reader_loop(HostState& host) {
 
 int main(int argc, char** argv) {
     Options opt = parse_args(argc, argv);
+    if (opt.selftest) return run_selftest(opt);
     if (opt.ipc_path.empty()) die("--ipc <socket_path> is required");
 
     ::prctl(PR_SET_PDEATHSIG, SIGTERM);

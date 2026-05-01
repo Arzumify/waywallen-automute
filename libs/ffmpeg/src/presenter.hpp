@@ -13,6 +13,8 @@
 //   - PTS that drops backwards (loop wrap-around) re-baselines silently.
 //   - Frames more than `max_lag` behind schedule are dropped (return
 //     false) so a slow consumer or stalled decoder doesn't snowball.
+//   - Frames more than `max_sleep` ahead of schedule treat the PTS as
+//     a forward discontinuity and re-baseline rather than sleep forever.
 //   - Frames with pts<0 (PTS unavailable) skip pacing entirely.
 
 #include <chrono>
@@ -26,8 +28,9 @@ public:
     using Duration  = Clock::duration;
     using TimePoint = Clock::time_point;
 
-    explicit Presenter(Duration max_lag = std::chrono::milliseconds(250))
-        : max_lag_(max_lag) {}
+    explicit Presenter(Duration max_lag   = std::chrono::milliseconds(250),
+                       Duration max_sleep = std::chrono::seconds(1))
+        : max_lag_(max_lag), max_sleep_(max_sleep) {}
 
     // Force the next call to re-prime the baseline. Useful when the
     // caller knows the stream just looped or the decoder was reset.
@@ -67,12 +70,23 @@ public:
             t0_pts_  = pts_seconds;
             return false;
         }
-        if (now < target) std::this_thread::sleep_until(target);
+        if (now < target) {
+            if (target - now > max_sleep_) {
+                /* PTS jumped far forward — likely a stream discontinuity
+                 * (segmented HLS, edited file). Re-baseline instead of
+                 * sleeping forever; render this frame immediately. */
+                t0_wall_ = now;
+                t0_pts_  = pts_seconds;
+                return true;
+            }
+            std::this_thread::sleep_until(target);
+        }
         return true;
     }
 
 private:
     Duration  max_lag_;
+    Duration  max_sleep_;
     TimePoint t0_wall_ {};
     double    t0_pts_  { -1.0 };
     bool      primed_  { false };
