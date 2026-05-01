@@ -149,6 +149,14 @@ typedef struct ww_pool_vulkan_init {
     /* Optional render-node fd for drm_syncobj timeline export. If -1,
      * bridge opens its own /dev/dri/renderD12X. */
     int      drm_render_fd;
+    /* VkImageUsageFlags for the slot images bridge allocates. The
+     * producer is responsible for ensuring the negotiated DRM modifier's
+     * tiling-features cover these usages — when alloc fails, bridge
+     * emits bind_failed and the daemon re-picks. Pass 0 to use the
+     * default (TRANSFER_DST | TRANSFER_SRC), which matches the "transfer
+     * only producer + transfer-only consumer shadow" setup that all
+     * existing producers use. */
+    uint32_t image_usage_flags;
 } ww_pool_vulkan_init_t;
 
 /* -----------------------------------------------------------------------

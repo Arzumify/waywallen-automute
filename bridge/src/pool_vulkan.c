@@ -54,6 +54,11 @@ typedef struct vk_state {
     PFN_vkGetImageDrmFormatModifierPropertiesEXT    vkGetImageDrmFormatModifierPropertiesEXT;
     PFN_vkDeviceWaitIdle                            vkDeviceWaitIdle;
 
+    /* Producer-configured slot image usage. Populated from
+     * ww_pool_vulkan_init_t::image_usage_flags (defaulted in
+     * backend_init when caller passed 0). */
+    VkImageUsageFlags image_usage;
+
     /* Per-slot resources. */
     struct {
         VkImage         image;
@@ -247,20 +252,18 @@ static int alloc_slot(ww_pool_t *pool, uint32_t slot_index,
     img_ci.arrayLayers   = 1;
     img_ci.samples       = VK_SAMPLE_COUNT_1_BIT;
     img_ci.tiling        = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-    /* Match the consumer's `TRANSFER_SRC_BIT` exactly (see
-     * waywallen-display/src/backend_vulkan.c). For
-     * VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, the modifier alone does
-     * NOT pin the DCC sub-layout — the driver also picks compression
-     * block size / metadata swizzle from the usage flags. SAMPLED here
-     * makes the driver lay out DCC for sampler reads, which the
-     * TRANSFER_SRC-only consumer can't decompress, producing tile-grid
-     * repeats + stripes on import. We never actually sample this image
-     * (plugin only writes via TRANSFER_DST; consumer only reads via
-     * TRANSFER_SRC into a separate shadow). Keeping TRANSFER_SRC in the
-     * usage mask too forces both sides into the same transfer-path
-     * sub-layout. */
-    img_ci.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    /* Producer-configured usage. For VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT
+     * the modifier alone does not pin the DCC sub-layout — the driver
+     * also picks compression block size / metadata swizzle from the
+     * usage flags, and the chosen sub-layout must match what the
+     * consumer (waywallen-display/src/backend_vulkan.c) creates the
+     * shadow image with (currently TRANSFER_SRC-only). Mismatched
+     * usages produce tile-grid stripes on import. The default
+     * TRANSFER_DST | TRANSFER_SRC matches the consumer; producers that
+     * need anything else (e.g. SAMPLED for direct sampling, COLOR_ATTACHMENT
+     * for direct rendering without an intermediate) must coordinate the
+     * extra usage with the consumer side. */
+    img_ci.usage         = st->image_usage;
     img_ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     img_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -472,6 +475,10 @@ static int backend_init(ww_pool_t *pool, const void *init_data) {
     st->device       = (VkDevice)init->device;
     st->queue        = (VkQueue)init->queue;
     st->queue_family = init->queue_family_index;
+    st->image_usage  = init->image_usage_flags
+                           ? init->image_usage_flags
+                           : (VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                              | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 
     /* See pool_egl_gbm: function-pointer-vs-object-pointer trick. */
     union {
