@@ -6,6 +6,7 @@ edition = "2021"
 [[bin]]
 name = "waywallen-display-layer-shell"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 anyhow = "1.0"

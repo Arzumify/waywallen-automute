@@ -48,3 +48,15 @@ sea-orm-migration = { version = "1.1", default-features = false, features = [
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1.0", features = ["full", "test-util"] }
+
+# Skip the empty `cargo test` binaries for bins that hold no #[test]s —
+# saves a redundant link of the daemon lib per bin.
+[[bin]]
+name = "waywallen_display_demo"
+path = "src/bin/waywallen_display_demo.rs"
+test = false
+
+[[bin]]
+name = "waywallen_renderer"
+path = "src/bin/waywallen_renderer.rs"
+test = false
