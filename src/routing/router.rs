@@ -675,22 +675,30 @@ impl Router {
         width: u32,
         height: u32,
     ) {
-        let existed = {
+        if width == 0 || height == 0 {
+            log::warn!(
+                "update_display_size: ignoring zero dim ({width}x{height}) for display {display_id:?}",
+            );
+            return;
+        }
+        let changed = {
             let mut inner = self.inner.lock().await;
             if let Some(s) = inner.displays.get_mut(&display_id) {
+                let differs = s.info.width != width || s.info.height != height;
                 s.info.width = width;
                 s.info.height = height;
-                true
+                differs
             } else {
-                false
+                return;
             }
-            // Phase 3 will re-emit SetConfig on resize. For Phase 1 we
-            // mirror the legacy behavior: size update without re-config.
         };
-        if existed {
-            if let Some(snap) = self.snapshot_display(display_id).await {
-                self.emit(RouterEvent::DisplayUpsert(snap));
-            }
+        // Layout depends on disp_w/disp_h, so any size change must
+        // trigger a fresh set_config under the resolved fillmode/align.
+        if changed {
+            self.resync_display_set_config(display_id).await;
+        }
+        if let Some(snap) = self.snapshot_display(display_id).await {
+            self.emit(RouterEvent::DisplayUpsert(snap));
         }
     }
 
@@ -1985,5 +1993,105 @@ mod tests {
         assert_eq!((cfg.dest_x, cfg.dest_y, cfg.dest_w, cfg.dest_h), (50.0, 75.0, 400.0, 300.0));
         // Explicit clear color survives.
         assert_eq!(cfg.clear_rgba, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    // -----------------------------------------------------------------
+    // update_display_size — Phase 3 resync
+    // -----------------------------------------------------------------
+
+    use crate::renderer_manager::BindSnapshot;
+
+    fn fake_bind_snapshot(generation: u64, w: u32, h: u32) -> BindSnapshot {
+        BindSnapshot {
+            generation,
+            flags: 0,
+            count: 0,
+            fourcc: 0x34325258, // XR24
+            width: w,
+            height: h,
+            modifier: 0,
+            planes_per_buffer: 1,
+            stride: vec![],
+            plane_offset: vec![],
+            size: vec![],
+            fds: vec![],
+        }
+    }
+
+    /// Drain everything currently sitting on the rx and return only the
+    /// last `SetConfig` payload — the one the consumer would actually
+    /// observe after the wire flush.
+    fn last_set_config(rx: &mut mpsc::UnboundedReceiver<DisplayOutEvent>) -> Option<ProjectedConfig> {
+        let mut out = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let DisplayOutEvent::SetConfig(c) = ev {
+                out = Some(c);
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn update_display_size_resyncs_set_config() {
+        let mgr = Arc::new(RendererManager::new_default());
+        let router = Router::new(mgr.clone());
+
+        // Renderer with a bind snapshot so resync_display_set_config has
+        // a generation to read and project_link gets the renderer's
+        // tex dims.
+        let r = RendererHandle::test_stub("r1", "scene"); // 1920x1080
+        *r.bind_snapshot().lock().unwrap() = Some(fake_bind_snapshot(1, 1920, 1080));
+        mgr.register_test_handle(r.clone()).await;
+        router.register_renderer(r.clone()).await;
+
+        // Register display 1920x1080 — auto-link + initial Bind/SetConfig.
+        let mut h = router.register_display(reg("HDMI-A-1", 1920, 1080)).await;
+        let initial = last_set_config(&mut h.rx).expect("initial SetConfig");
+        assert_eq!((initial.dest_w, initial.dest_h), (1920.0, 1080.0));
+
+        // Resize to 1280x720 — Stretched + Center default → identity at new dims.
+        router.update_display_size(h.id, 1280, 720).await;
+        let resized = last_set_config(&mut h.rx).expect("SetConfig after resize");
+        assert_eq!((resized.dest_x, resized.dest_y), (0.0, 0.0));
+        assert_eq!((resized.dest_w, resized.dest_h), (1280.0, 720.0));
+        assert!(resized.config_generation > initial.config_generation);
+    }
+
+    #[tokio::test]
+    async fn update_display_size_same_dims_no_resync() {
+        let mgr = Arc::new(RendererManager::new_default());
+        let router = Router::new(mgr.clone());
+        let r = RendererHandle::test_stub("r1", "scene");
+        *r.bind_snapshot().lock().unwrap() = Some(fake_bind_snapshot(1, 1920, 1080));
+        mgr.register_test_handle(r.clone()).await;
+        router.register_renderer(r.clone()).await;
+
+        let mut h = router.register_display(reg("HDMI-A-1", 1920, 1080)).await;
+        // Drain initial events.
+        let _ = last_set_config(&mut h.rx);
+
+        router.update_display_size(h.id, 1920, 1080).await;
+        // No new SetConfig should land on the rx.
+        assert!(last_set_config(&mut h.rx).is_none());
+    }
+
+    #[tokio::test]
+    async fn update_display_size_zero_dim_ignored() {
+        let mgr = Arc::new(RendererManager::new_default());
+        let router = Router::new(mgr.clone());
+        let r = RendererHandle::test_stub("r1", "scene");
+        *r.bind_snapshot().lock().unwrap() = Some(fake_bind_snapshot(1, 1920, 1080));
+        mgr.register_test_handle(r.clone()).await;
+        router.register_renderer(r.clone()).await;
+
+        let mut h = router.register_display(reg("HDMI-A-1", 1920, 1080)).await;
+        let _ = last_set_config(&mut h.rx);
+
+        // Zero dim → drop on the floor; field stays at 1920x1080.
+        router.update_display_size(h.id, 0, 720).await;
+        router.update_display_size(h.id, 1280, 0).await;
+        assert!(last_set_config(&mut h.rx).is_none());
+        let snap = router.snapshot_display(h.id).await.unwrap();
+        assert_eq!((snap.width, snap.height), (1920, 1080));
     }
 }
