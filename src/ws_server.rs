@@ -14,6 +14,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 
 use crate::control;
 use crate::control_proto as pb;
+use crate::error::{ok_response, Error};
 use crate::events::GlobalEvent;
 use crate::ipc::proto::ControlMsg;
 use crate::model::repo;
@@ -106,7 +107,7 @@ async fn handle_conn(
                 let req = match pb::Request::decode(&bytes[..]) {
                     Ok(r) => r,
                     Err(e) => {
-                        let resp = error_response(0, pb::Status::InvalidArgument, format!("decode: {e}"));
+                        let resp = Error::Decode(e).to_response(0);
                         sink.send(Message::Binary(wrap_response(resp).encode_to_vec())).await?;
                         continue;
                     }
@@ -182,7 +183,7 @@ async fn handle_conn(
                             let req = match pb::Request::decode(&bytes[..]) {
                                 Ok(r) => r,
                                 Err(e) => {
-                                    let resp = error_response(0, pb::Status::InvalidArgument, format!("decode: {e}"));
+                                    let resp = Error::Decode(e).to_response(0);
                                     sink.send(Message::Binary(wrap_response(resp).encode_to_vec())).await?;
                                     continue;
                                 }
@@ -513,21 +514,25 @@ fn global_event_to_pb(e: &GlobalEvent, state: &Arc<AppState>) -> Option<pb::Even
 
 async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
     let rid = req.request_id;
-    let Some(payload) = req.payload else {
-        return error_response(rid, pb::Status::InvalidArgument, "empty request payload".into());
-    };
+    build_response(rid, dispatch_inner(state, req).await)
+}
+
+async fn dispatch_inner(
+    state: &Arc<AppState>,
+    req: pb::Request,
+) -> Result<pb::response::Payload, Error> {
+    let payload = req
+        .payload
+        .ok_or(Error::UnexpectedPayload("empty request payload"))?;
 
     use pb::request::Payload as Req;
     use pb::response::Payload as Res;
 
-    match payload {
-        Req::Health(_) => ok(
-            rid,
-            Res::Health(pb::HealthResponse {
-                service: "waywallen".into(),
-                state: "healthy".into(),
-            }),
-        ),
+    Ok(match payload {
+        Req::Health(_) => Res::Health(pb::HealthResponse {
+            service: "waywallen".into(),
+            state: "healthy".into(),
+        }),
 
         Req::RendererSpawn(r) => {
             // Low-level RPC: caller hands in a single `metadata` map.
@@ -553,15 +558,15 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 test_pattern: false,
                 renderer_name: None,
             };
-            match state.renderer_manager.spawn(spawn_req).await {
-                Ok(id) => {
-                    if let Some(handle) = state.renderer_manager.get(&id).await {
-                        state.router.register_renderer(handle).await;
-                    }
-                    ok(rid, Res::RendererSpawn(pb::RendererSpawnResponse { renderer_id: id }))
-                }
-                Err(e) => error_response(rid, pb::Status::Internal, format!("spawn failed: {e}")),
+            let id = state
+                .renderer_manager
+                .spawn(spawn_req)
+                .await
+                .map_err(|e| Error::RendererSpawnFailed(e.to_string()))?;
+            if let Some(handle) = state.renderer_manager.get(&id).await {
+                state.router.register_renderer(handle).await;
             }
+            Res::RendererSpawn(pb::RendererSpawnResponse { renderer_id: id })
         }
 
         Req::RendererList(_) => {
@@ -589,57 +594,56 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                     pid,
                 });
             }
-            ok(
-                rid,
-                Res::RendererList(pb::RendererListResponse {
-                    renderers: ids,
-                    instances,
-                }),
-            )
+            Res::RendererList(pb::RendererListResponse {
+                renderers: ids,
+                instances,
+            })
         }
 
-        Req::RendererPlay(r) => match state
-            .renderer_manager
-            .send_control(&r.renderer_id, ControlMsg::Play)
-            .await
-        {
-            Ok(()) => ok(rid, Res::RendererPlay(pb::Empty {})),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::RendererPlay(r) => {
+            state
+                .renderer_manager
+                .send_control(&r.renderer_id, ControlMsg::Play)
+                .await
+                .map_err(|e| Error::RendererControlFailed(e.to_string()))?;
+            Res::RendererPlay(pb::Empty {})
+        }
 
-        Req::RendererPause(r) => match state
-            .renderer_manager
-            .send_control(&r.renderer_id, ControlMsg::Pause)
-            .await
-        {
-            Ok(()) => ok(rid, Res::RendererPause(pb::Empty {})),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::RendererPause(r) => {
+            state
+                .renderer_manager
+                .send_control(&r.renderer_id, ControlMsg::Pause)
+                .await
+                .map_err(|e| Error::RendererControlFailed(e.to_string()))?;
+            Res::RendererPause(pb::Empty {})
+        }
 
-        Req::RendererMouse(r) => match state
-            .renderer_manager
-            .send_control(&r.renderer_id, ControlMsg::Mouse { x: r.x, y: r.y })
-            .await
-        {
-            Ok(()) => ok(rid, Res::RendererMouse(pb::Empty {})),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::RendererMouse(r) => {
+            state
+                .renderer_manager
+                .send_control(&r.renderer_id, ControlMsg::Mouse { x: r.x, y: r.y })
+                .await
+                .map_err(|e| Error::RendererControlFailed(e.to_string()))?;
+            Res::RendererMouse(pb::Empty {})
+        }
 
-        Req::RendererFps(r) => match state
-            .renderer_manager
-            .send_control(&r.renderer_id, ControlMsg::SetFps { fps: r.fps })
-            .await
-        {
-            Ok(()) => ok(rid, Res::RendererFps(pb::Empty {})),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::RendererFps(r) => {
+            state
+                .renderer_manager
+                .send_control(&r.renderer_id, ControlMsg::SetFps { fps: r.fps })
+                .await
+                .map_err(|e| Error::RendererControlFailed(e.to_string()))?;
+            Res::RendererFps(pb::Empty {})
+        }
 
         Req::RendererKill(r) => {
             state.router.unregister_renderer(&r.renderer_id).await;
-            match state.renderer_manager.kill(&r.renderer_id).await {
-                Ok(()) => ok(rid, Res::RendererKill(pb::Empty {})),
-                Err(e) => error_response(rid, pb::Status::NotFound, e.to_string()),
-            }
+            state
+                .renderer_manager
+                .kill(&r.renderer_id)
+                .await
+                .map_err(|e| Error::RendererNotFound(e.to_string()))?;
+            Res::RendererKill(pb::Empty {})
         }
 
         Req::RendererPluginList(_) => {
@@ -671,13 +675,10 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 .into_iter()
                 .cloned()
                 .collect();
-            ok(
-                rid,
-                Res::RendererPluginList(pb::RendererPluginListResponse {
-                    renderers,
-                    supported_types,
-                }),
-            )
+            Res::RendererPluginList(pb::RendererPluginListResponse {
+                renderers,
+                supported_types,
+            })
         }
 
         Req::WallpaperList(r) => {
@@ -687,12 +688,15 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
 
             // Build a lookup map: (library.path, item.path) -> item::Model
             // so we can overlay DB media-meta (size/width/height/format) onto
-            // each WallpaperEntry before sending it to the UI.
+            // each WallpaperEntry before sending it to the UI. DB read
+            // failures propagate as `Internal` (via anyhow::Error From)
+            // instead of being silently dropped — the caller sees the
+            // actual problem.
             let db_meta_map: std::collections::HashMap<(String, String), crate::model::entities::item::Model> = {
-                let libs = repo::list_libraries(&state.db).await.unwrap_or_default();
+                let libs = repo::list_libraries(&state.db).await?;
                 let lib_path_by_id: std::collections::HashMap<i64, String> =
                     libs.into_iter().map(|l| (l.id, l.path)).collect();
-                let items = repo::list_items_all(&state.db).await.unwrap_or_default();
+                let items = repo::list_items_all(&state.db).await?;
                 items
                     .into_iter()
                     .filter_map(|it| {
@@ -731,13 +735,10 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 })
                 .collect();
 
-            ok(
-                rid,
-                Res::WallpaperList(pb::WallpaperListResponse {
-                    wallpapers: entries,
-                    count: total,
-                }),
-            )
+            Res::WallpaperList(pb::WallpaperListResponse {
+                wallpapers: entries,
+                count: total,
+            })
         }
 
         Req::WallpaperScan(_) => {
@@ -754,10 +755,7 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 "scan/refresh",
                 async move { control::refresh_sources(&scan_state).await.map(|_| ()) },
             );
-            ok(
-                rid,
-                Res::WallpaperScan(pb::WallpaperScanResponse { count: 0 }),
-            )
+            Res::WallpaperScan(pb::WallpaperScanResponse { count: 0 })
         }
 
         Req::SourceList(_) => {
@@ -772,7 +770,7 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                     version: p.version,
                 })
                 .collect();
-            ok(rid, Res::SourceList(pb::SourceListResponse { sources }))
+            Res::SourceList(pb::SourceListResponse { sources })
         }
 
         Req::DisplayList(_) => {
@@ -781,7 +779,7 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 .into_iter()
                 .map(|d| display_snapshot_to_pb(d, &state.settings))
                 .collect();
-            ok(rid, Res::DisplayList(pb::DisplayListResponse { displays }))
+            Res::DisplayList(pb::DisplayListResponse { displays })
         }
 
         Req::DisplayLayoutSet(r) => {
@@ -827,10 +825,7 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 .into_iter()
                 .find(|d| d.name == r.name)
                 .map(|d| display_snapshot_to_pb(d, &state.settings));
-            ok(
-                rid,
-                Res::DisplayLayoutSet(pb::DisplayLayoutSetResponse { display }),
-            )
+            Res::DisplayLayoutSet(pb::DisplayLayoutSetResponse { display })
         }
 
         Req::WallpaperApply(r) => {
@@ -838,52 +833,28 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 let snap = state.source_snapshot.read().await;
                 snap.get(&r.wallpaper_id).cloned()
             };
-            let Some(entry) = entry else {
-                return error_response(
-                    rid,
-                    pb::Status::NotFound,
-                    format!("wallpaper '{}' not found", r.wallpaper_id),
-                );
-            };
+            let entry = entry.ok_or_else(|| Error::WallpaperNotFound(r.wallpaper_id.clone()))?;
             if state.router.display_count().await == 0 {
-                return error_response(
-                    rid,
-                    pb::Status::FailedPrecondition,
-                    "no display registered".into(),
-                );
+                return Err(Error::NoDisplayRegistered);
             }
             // Renderer pick: empty renderer_name uses priority resolve
             // (current behaviour); explicit name must match a registered
             // renderer that supports this wallpaper's type.
             let registry = state.renderer_manager.registry();
             let plugin_name: String = if r.renderer_name.is_empty() {
-                match registry.resolve(&entry.wp_type) {
-                    Some(def) => def.name.clone(),
-                    None => {
-                        return error_response(
-                            rid,
-                            pb::Status::InvalidArgument,
-                            format!("no renderer for wallpaper type '{}'", entry.wp_type),
-                        );
-                    }
-                }
+                registry
+                    .resolve(&entry.wp_type)
+                    .map(|def| def.name.clone())
+                    .ok_or_else(|| Error::NoRendererForType(entry.wp_type.clone()))?
             } else {
-                let Some(def) = registry.resolve_by_name(&r.renderer_name) else {
-                    return error_response(
-                        rid,
-                        pb::Status::NotFound,
-                        format!("unknown renderer '{}'", r.renderer_name),
-                    );
-                };
+                let def = registry
+                    .resolve_by_name(&r.renderer_name)
+                    .ok_or_else(|| Error::RendererNotFound(r.renderer_name.clone()))?;
                 if !def.types.iter().any(|t| t == &entry.wp_type) {
-                    return error_response(
-                        rid,
-                        pb::Status::InvalidArgument,
-                        format!(
-                            "renderer '{}' does not support wallpaper type '{}'",
-                            r.renderer_name, entry.wp_type
-                        ),
-                    );
+                    return Err(Error::RendererTypeMismatch {
+                        renderer: r.renderer_name.clone(),
+                        ty: entry.wp_type.clone(),
+                    });
                 }
                 def.name.clone()
             };
@@ -907,25 +878,20 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
             // SPAWN_VERSION 3: extras (canonical `path` + manifest
             // whitelist like `assets`/`workshop_id`) ride as CLI
             // argv. Ask the source plugin for the dict via its
-            // `extras(entry)` Lua callback; plugins that haven't
-            // migrated yet fall through to `entry.metadata` inside
-            // `call_extras`, preserving back-compat.
-            let extras = match state
+            // `extras(entry)` Lua callback. Lua failures used to fall
+            // back to `entry.metadata` silently with a warn; now they
+            // surface as `SourceExtrasFailed` so the UI shows the real
+            // problem instead of a confusing "wrong settings" follow-up.
+            let extras = state
                 .source_manager
                 .lock()
                 .await
                 .call_extras(&entry.plugin_name, &entry)
                 .await
-            {
-                Ok(m) => m,
-                Err(e) => {
-                    log::warn!(
-                        "source_plugin '{}'.extras() failed: {e}; using entry.metadata fallback",
-                        entry.plugin_name
-                    );
-                    entry.metadata.clone()
-                }
-            };
+                .map_err(|e| Error::SourceExtrasFailed {
+                    plugin: entry.plugin_name.clone(),
+                    message: e.to_string(),
+                })?;
 
             let spawn_req = renderer_manager::SpawnRequest {
                 wp_type: entry.wp_type.clone(),
@@ -980,37 +946,16 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                         );
                         state.router.stop_renderers(&to_stop).await;
                     }
-                    match state.renderer_manager.spawn(spawn_req).await {
-                    Ok(new_id) => {
-                        if let Some(handle) = state.renderer_manager.get(&new_id).await {
-                            state.router.register_renderer(handle).await;
-                        }
-                        new_id
+                    let new_id = state
+                        .renderer_manager
+                        .spawn(spawn_req)
+                        .await
+                        .map_err(|e| Error::RendererSpawnFailed(e.to_string()))?;
+                    if let Some(handle) = state.renderer_manager.get(&new_id).await {
+                        state.router.register_renderer(handle).await;
                     }
-                    Err(e) => {
-                        // Schema-validation errors raised from
-                        // `build_init_msg` mean the source plugin's
-                        // metadata didn't match the renderer
-                        // manifest. Surface those as InvalidArgument
-                        // so the UI shows a meaningful "your Lua
-                        // wrote the wrong key" message instead of an
-                        // opaque Internal error. Anything else
-                        // (fork/exec/handshake/timeout) stays
-                        // Internal.
-                        let msg = e.to_string();
-                        let status = if msg.contains("metadata validation failed") {
-                            pb::Status::InvalidArgument
-                        } else {
-                            pb::Status::Internal
-                        };
-                        return error_response(
-                            rid,
-                            status,
-                            format!("spawn failed: {e}"),
-                        );
-                    }
+                    new_id
                 }
-                },
             };
 
             // Relink: empty display_ids means "all currently registered
@@ -1046,15 +991,12 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
             // full quiet window before the next auto tick.
             state.rotation.kick();
 
-            ok(
-                rid,
-                Res::WallpaperApply(pb::WallpaperApplyResponse {
-                    renderer_id,
-                    wallpaper_id: entry.id,
-                    wp_type: entry.wp_type,
-                    name: entry.name,
-                }),
-            )
+            Res::WallpaperApply(pb::WallpaperApplyResponse {
+                renderer_id,
+                wallpaper_id: entry.id,
+                wp_type: entry.wp_type,
+                name: entry.name,
+            })
         }
 
         Req::SettingsGet(_) => {
@@ -1064,23 +1006,20 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 align: align_to_pb(snap.global.layout.align) as i32,
                 clear_rgba: snap.global.layout.clear_rgba.to_vec(),
             };
-            ok(
-                rid,
-                Res::SettingsGet(pb::SettingsGetResponse {
-                    global: Some(pb::GlobalSettings {
-                        target_extent: snap.global.target_extent,
-                        render_size_policy: render_size_policy_to_pb(
-                            snap.global.render_size_policy,
-                        ) as i32,
-                        layout_defaults: Some(layout_defaults),
-                    }),
-                    plugins: snap
-                        .plugins
-                        .into_iter()
-                        .map(|(k, v)| (k, pb::PluginSettings { values: v }))
-                        .collect(),
+            Res::SettingsGet(pb::SettingsGetResponse {
+                global: Some(pb::GlobalSettings {
+                    target_extent: snap.global.target_extent,
+                    render_size_policy: render_size_policy_to_pb(
+                        snap.global.render_size_policy,
+                    ) as i32,
+                    layout_defaults: Some(layout_defaults),
                 }),
-            )
+                plugins: snap
+                    .plugins
+                    .into_iter()
+                    .map(|(k, v)| (k, pb::PluginSettings { values: v }))
+                    .collect(),
+            })
         }
 
         Req::SettingsSet(r) => {
@@ -1117,16 +1056,13 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                         let Some(schema) = def.settings.get(k) else {
                             continue;
                         };
-                        match crate::plugin::renderer_registry::coerce_and_validate(k, v, schema) {
-                            Ok(coerced) => *v = coerced,
-                            Err(e) => {
-                                return error_response(
-                                    rid,
-                                    pb::Status::InvalidArgument,
-                                    format!("settings_set: {plugin_name}.{e}"),
-                                );
-                            }
-                        }
+                        let coerced = crate::plugin::renderer_registry::coerce_and_validate(
+                            k, v, schema,
+                        )
+                        .map_err(|e| {
+                            Error::SettingsValidationFailed(format!("{plugin_name}.{e}"))
+                        })?;
+                        *v = coerced;
                     }
                 }
             }
@@ -1184,6 +1120,13 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                     plugin_names_changed.insert(name.clone());
                 }
             }
+            // Hot-reload failures used to be `log::warn`-and-continue.
+            // Now we collect every per-renderer failure during the
+            // walk; if any happened, propagate one aggregate
+            // `SettingsApplyFailed` after publishing the change event
+            // (settings are persisted regardless — the caller still
+            // needs to know hot-reload was incomplete).
+            let mut apply_failures: Vec<String> = Vec::new();
             for plugin_name in plugin_names_changed {
                 let def = state
                     .renderer_manager
@@ -1228,119 +1171,100 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                         .send_apply_settings(&id, kv.clone(), None)
                         .await
                     {
-                        log::warn!(
-                            "settings_set: live ApplySettings to {id} ({plugin_name}) failed: {e}"
-                        );
+                        apply_failures.push(format!("{id} ({plugin_name}): {e}"));
                     }
                 }
             }
             // Push the merged post-write state to all WS subscribers so
             // a second UI bound to the same daemon stays in sync.
             state.events.publish(GlobalEvent::SettingsChanged);
-            ok(rid, Res::SettingsSet(pb::Empty {}))
+            if !apply_failures.is_empty() {
+                return Err(Error::SettingsApplyFailed(format!(
+                    "{} renderer(s): {}",
+                    apply_failures.len(),
+                    apply_failures.join("; ")
+                )));
+            }
+            Res::SettingsSet(pb::Empty {})
         }
 
         Req::LibraryList(_) => {
             let snap = control::list_library_snapshots(&state.db).await;
-            ok(
-                rid,
-                Res::LibraryList(pb::LibraryListResponse {
-                    libraries: snap.into_iter().map(library_instance_to_pb).collect(),
-                }),
-            )
+            Res::LibraryList(pb::LibraryListResponse {
+                libraries: snap.into_iter().map(library_instance_to_pb).collect(),
+            })
         }
 
         Req::LibraryAdd(r) => {
-            let plugin_id = match repo::find_plugin_by_name(&state.db, &r.plugin_name).await {
-                Ok(Some(p)) => p.id,
-                Ok(None) => {
-                    return error_response(
-                        rid,
-                        pb::Status::NotFound,
-                        format!("source plugin '{}' not found", r.plugin_name),
-                    )
-                }
-                Err(e) => return error_response(rid, pb::Status::Internal, e.to_string()),
+            let plugin = repo::find_plugin_by_name(&state.db, &r.plugin_name)
+                .await?
+                .ok_or_else(|| Error::SourcePluginNotFound(r.plugin_name.clone()))?;
+            let lib = repo::add_library(&state.db, plugin.id, &r.path).await?;
+            let snap = LibrarySnapshot {
+                id: lib.id,
+                path: lib.path,
+                plugin_name: r.plugin_name,
             };
-            match repo::add_library(&state.db, plugin_id, &r.path).await {
-                Ok(lib) => {
-                    let snap = LibrarySnapshot {
-                        id: lib.id,
-                        path: lib.path,
-                        plugin_name: r.plugin_name,
-                    };
-                    let added_path = snap.path.clone();
-                    state.router.upsert_library(snap);
-                    state.events.publish(GlobalEvent::LibrariesAdded {
-                        paths: vec![added_path],
-                    });
-                    // Rescan so the new library's items flow into the
-                    // in-memory snapshot + DB without waiting for the
-                    // next daemon restart. Shares `"scan/refresh"`
-                    // dedup key with manual scans — rapid LibraryAdd
-                    // bursts collapse into a single in-flight scan.
-                    let rescan_state = state.clone();
-                    state.tasks.spawn_async_unique(
-                        tasks::TaskKind::Generic,
-                        "scan/refresh",
-                        "scan/refresh-after-library-add",
-                        async move {
-                            control::refresh_sources(&rescan_state).await.map(|_| ())
-                        },
-                    );
-                    ok(rid, Res::LibraryAdd(pb::Empty {}))
-                }
-                Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-            }
+            let added_path = snap.path.clone();
+            state.router.upsert_library(snap);
+            state.events.publish(GlobalEvent::LibrariesAdded {
+                paths: vec![added_path],
+            });
+            // Rescan so the new library's items flow into the
+            // in-memory snapshot + DB without waiting for the
+            // next daemon restart. Shares `"scan/refresh"`
+            // dedup key with manual scans — rapid LibraryAdd
+            // bursts collapse into a single in-flight scan.
+            let rescan_state = state.clone();
+            state.tasks.spawn_async_unique(
+                tasks::TaskKind::Generic,
+                "scan/refresh",
+                "scan/refresh-after-library-add",
+                async move {
+                    control::refresh_sources(&rescan_state).await.map(|_| ())
+                },
+            );
+            Res::LibraryAdd(pb::Empty {})
         }
 
-        Req::LibraryAutoDetect(_) => match control::auto_detect_libraries(&state).await {
-            Ok(added) => ok(
-                rid,
-                Res::LibraryAutoDetect(pb::LibraryAutoDetectResponse {
-                    added: added.into_iter().map(library_instance_to_pb).collect(),
-                }),
-            ),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::LibraryAutoDetect(_) => {
+            let added = control::auto_detect_libraries(&state).await?;
+            Res::LibraryAutoDetect(pb::LibraryAutoDetectResponse {
+                added: added.into_iter().map(library_instance_to_pb).collect(),
+            })
+        }
 
-        Req::LibraryRemove(r) => match repo::remove_library(&state.db, r.id).await {
-            Ok(_) => {
-                state.router.remove_library(r.id);
-                let rescan_state = state.clone();
-                state.tasks.spawn_async_unique(
-                    tasks::TaskKind::Generic,
-                    "scan/refresh",
-                    "scan/refresh-after-library-remove",
-                    async move {
-                        control::refresh_sources(&rescan_state).await.map(|_| ())
-                    },
-                );
-                ok(rid, Res::LibraryRemove(pb::Empty {}))
-            }
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::LibraryRemove(r) => {
+            repo::remove_library(&state.db, r.id).await?;
+            state.router.remove_library(r.id);
+            let rescan_state = state.clone();
+            state.tasks.spawn_async_unique(
+                tasks::TaskKind::Generic,
+                "scan/refresh",
+                "scan/refresh-after-library-remove",
+                async move {
+                    control::refresh_sources(&rescan_state).await.map(|_| ())
+                },
+            );
+            Res::LibraryRemove(pb::Empty {})
+        }
 
         // ---- playlists ----------------------------------------------------
 
         Req::PlaylistList(_) => {
-            match control::list_playlists(&state).await {
-                Ok(rows) => {
-                    let playlists = rows
-                        .into_iter()
-                        .map(|s| pb::PlaylistSummary {
-                            id: s.id,
-                            name: s.name,
-                            source_kind: s.source_kind,
-                            mode: mode_str_to_pb(&s.mode) as i32,
-                            interval_secs: s.interval_secs.max(0) as u32,
-                            item_count: s.item_count,
-                        })
-                        .collect();
-                    ok(rid, Res::PlaylistList(pb::PlaylistListResponse { playlists }))
-                }
-                Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-            }
+            let rows = control::list_playlists(&state).await?;
+            let playlists = rows
+                .into_iter()
+                .map(|s| pb::PlaylistSummary {
+                    id: s.id,
+                    name: s.name,
+                    source_kind: s.source_kind,
+                    mode: mode_str_to_pb(&s.mode) as i32,
+                    interval_secs: s.interval_secs.max(0) as u32,
+                    item_count: s.item_count,
+                })
+                .collect();
+            Res::PlaylistList(pb::PlaylistListResponse { playlists })
         }
 
         Req::PlaylistCreate(r) => {
@@ -1353,128 +1277,107 @@ async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
                 interval_secs: r.interval_secs as i32,
                 shuffle_seed: 0,
             };
-            match repo::create_playlist(&state.db, args).await {
-                Ok(p) => {
-                    if !r.item_ids.is_empty() {
-                        if let Err(e) =
-                            repo::set_playlist_items(&state.db, p.id, &r.item_ids).await
-                        {
-                            // Best-effort cleanup so we don't leave an
-                            // empty stub the user didn't ask for.
-                            let _ = repo::delete_playlist(&state.db, p.id).await;
-                            return error_response(rid, pb::Status::Internal, e.to_string());
-                        }
-                    }
-                    ok(rid, Res::PlaylistCreate(pb::PlaylistCreateResponse { id: p.id }))
+            let p = repo::create_playlist(&state.db, args)
+                .await
+                .map_err(|e| Error::PlaylistInvalid(e.to_string()))?;
+            if !r.item_ids.is_empty() {
+                if let Err(e) = repo::set_playlist_items(&state.db, p.id, &r.item_ids).await {
+                    // Best-effort cleanup so we don't leave an empty
+                    // stub the user didn't ask for.
+                    let _ = repo::delete_playlist(&state.db, p.id).await;
+                    return Err(Error::from(e));
                 }
-                Err(e) => error_response(rid, pb::Status::InvalidArgument, e.to_string()),
             }
+            Res::PlaylistCreate(pb::PlaylistCreateResponse { id: p.id })
         }
 
-        Req::PlaylistDelete(r) => match repo::delete_playlist(&state.db, r.id).await {
-            Ok(_) => {
-                // If the deleted playlist was active, fall back to All
-                // so the rotator + step path don't keep walking a
-                // dangling cursor.
-                let active = state.playlist.lock().await.active_id;
-                if active == Some(r.id) {
-                    if let Err(e) = control::deactivate_playlist(&state).await {
-                        log::warn!("auto-deactivate after delete failed: {e:#}");
-                    }
-                }
-                ok(rid, Res::PlaylistDelete(pb::Empty {}))
+        Req::PlaylistDelete(r) => {
+            repo::delete_playlist(&state.db, r.id).await?;
+            // If the deleted playlist was active, fall back to All so
+            // the rotator + step path don't keep walking a dangling
+            // cursor. Failure here used to be `log::warn`-and-swallow;
+            // now it propagates so the caller learns the daemon is in
+            // a half-state (row deleted, rotator still pointed at it).
+            let active = state.playlist.lock().await.active_id;
+            if active == Some(r.id) {
+                control::deactivate_playlist(&state).await?;
             }
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+            Res::PlaylistDelete(pb::Empty {})
+        }
 
-        Req::PlaylistRename(r) => match repo::rename_playlist(&state.db, r.id, &r.name).await {
-            Ok(_) => ok(rid, Res::PlaylistRename(pb::Empty {})),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::PlaylistRename(r) => {
+            repo::rename_playlist(&state.db, r.id, &r.name).await?;
+            Res::PlaylistRename(pb::Empty {})
+        }
 
         Req::PlaylistSetItems(r) => {
-            match repo::set_playlist_items(&state.db, r.id, &r.item_ids).await {
-                Ok(_) => {
-                    // If this playlist is the active one, refresh its
-                    // resolved id list immediately so the cursor sees
-                    // the new membership without waiting for a rescan.
-                    let active = state.playlist.lock().await.active_id;
-                    if active == Some(r.id) {
-                        if let Err(e) = control::activate_playlist(&state, r.id).await {
-                            log::warn!("post-set_items reactivate failed: {e:#}");
-                        }
-                    }
-                    ok(rid, Res::PlaylistSetItems(pb::Empty {}))
-                }
-                Err(e) => error_response(rid, pb::Status::InvalidArgument, e.to_string()),
+            repo::set_playlist_items(&state.db, r.id, &r.item_ids).await?;
+            // If this playlist is the active one, refresh its resolved
+            // id list immediately so the cursor sees the new
+            // membership without waiting for a rescan. Reactivation
+            // failure now propagates instead of being silently warned.
+            let active = state.playlist.lock().await.active_id;
+            if active == Some(r.id) {
+                control::activate_playlist(&state, r.id).await?;
             }
+            Res::PlaylistSetItems(pb::Empty {})
         }
 
         Req::PlaylistSetMode(r) => {
             let mode = pb_mode_to_enum(r.mode);
-            match repo::set_playlist_mode(&state.db, r.id, mode.as_str()).await {
-                Ok(_) => {
-                    let active = state.playlist.lock().await.active_id;
-                    if active == Some(r.id) {
-                        control::set_mode(&state, mode).await;
-                    }
-                    ok(rid, Res::PlaylistSetMode(pb::Empty {}))
-                }
-                Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
+            repo::set_playlist_mode(&state.db, r.id, mode.as_str()).await?;
+            let active = state.playlist.lock().await.active_id;
+            if active == Some(r.id) {
+                // `set_mode` returns `()` — no error to propagate.
+                control::set_mode(&state, mode).await;
             }
+            Res::PlaylistSetMode(pb::Empty {})
         }
 
         Req::PlaylistSetInterval(r) => {
-            match repo::set_playlist_interval(&state.db, r.id, r.interval_secs as i32).await {
-                Ok(_) => {
-                    let active = state.playlist.lock().await.active_id;
-                    if active == Some(r.id) {
-                        control::set_rotation_interval(&state, r.interval_secs).await;
-                    }
-                    ok(rid, Res::PlaylistSetInterval(pb::Empty {}))
-                }
-                Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
+            repo::set_playlist_interval(&state.db, r.id, r.interval_secs as i32).await?;
+            let active = state.playlist.lock().await.active_id;
+            if active == Some(r.id) {
+                // `set_rotation_interval` returns `()`.
+                control::set_rotation_interval(&state, r.interval_secs).await;
             }
+            Res::PlaylistSetInterval(pb::Empty {})
         }
 
-        Req::PlaylistActivate(r) => match control::activate_playlist(&state, r.id).await {
-            Ok(_) => {
-                // Adopt the row's stored interval into the live rotator
-                // so a rotating playlist starts ticking on activate
-                // without a separate set_interval round-trip.
-                if let Some(row) = repo::find_playlist(&state.db, r.id)
-                    .await
-                    .ok()
-                    .flatten()
-                {
-                    control::set_rotation_interval(&state, row.interval_secs.max(0) as u32).await;
-                }
-                ok(rid, Res::PlaylistActivate(pb::Empty {}))
+        Req::PlaylistActivate(r) => {
+            control::activate_playlist(&state, r.id)
+                .await
+                .map_err(|e| Error::PlaylistNotFound(e.to_string()))?;
+            // Adopt the row's stored interval into the live rotator so
+            // a rotating playlist starts ticking on activate without a
+            // separate set_interval round-trip. The lookup may legitimately
+            // return None mid-activation; the row's absence is advisory
+            // only (activate already succeeded) — but a real DB error
+            // should still surface.
+            if let Some(row) = repo::find_playlist(&state.db, r.id).await? {
+                control::set_rotation_interval(&state, row.interval_secs.max(0) as u32).await;
             }
-            Err(e) => error_response(rid, pb::Status::NotFound, e.to_string()),
-        },
+            Res::PlaylistActivate(pb::Empty {})
+        }
 
-        Req::PlaylistDeactivate(_) => match control::deactivate_playlist(&state).await {
-            Ok(_) => ok(rid, Res::PlaylistDeactivate(pb::Empty {})),
-            Err(e) => error_response(rid, pb::Status::Internal, e.to_string()),
-        },
+        Req::PlaylistDeactivate(_) => {
+            control::deactivate_playlist(&state).await?;
+            Res::PlaylistDeactivate(pb::Empty {})
+        }
 
         Req::PlaylistStatus(_) => {
             let s = control::playlist_status(&state).await;
-            ok(
-                rid,
-                Res::PlaylistStatus(pb::PlaylistStatusResponse {
-                    active_id: s.active_id.unwrap_or(0),
-                    mode: mode_str_to_pb(&s.mode) as i32,
-                    interval_secs: s.interval_secs,
-                    current_id: s.current.unwrap_or_default(),
-                    position: s.position.unwrap_or(0),
-                    count: s.count,
-                    is_smart: s.is_smart,
-                }),
-            )
+            Res::PlaylistStatus(pb::PlaylistStatusResponse {
+                active_id: s.active_id.unwrap_or(0),
+                mode: mode_str_to_pb(&s.mode) as i32,
+                interval_secs: s.interval_secs,
+                current_id: s.current.unwrap_or_default(),
+                position: s.position.unwrap_or(0),
+                count: s.count,
+                is_smart: s.is_smart,
+            })
         }
-    }
+    })
 }
 
 /// Decode the proto enum integer into the internal `playlist::Mode`.
@@ -1501,12 +1404,16 @@ fn mode_str_to_pb(s: &str) -> pb::PlaylistMode {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn ok(request_id: u64, payload: pb::response::Payload) -> pb::Response {
-    pb::Response {
-        request_id,
-        status: pb::Status::Ok as i32,
-        message: String::new(),
-        payload: Some(payload),
+/// Encode a dispatch result onto the wire. Thin wrapper around
+/// `Error::to_response` / `ok_response` from `crate::error`; the dispatch
+/// boundary is the only place the daemon-side `Error` becomes wire bytes.
+fn build_response(
+    request_id: u64,
+    result: Result<pb::response::Payload, Error>,
+) -> pb::Response {
+    match result {
+        Ok(payload) => ok_response(request_id, payload),
+        Err(e) => e.to_response(request_id),
     }
 }
 
@@ -1520,15 +1427,6 @@ fn wrap_response(resp: pb::Response) -> pb::ServerFrame {
 pub fn wrap_event(evt: pb::Event) -> pb::ServerFrame {
     pb::ServerFrame {
         kind: Some(pb::server_frame::Kind::Event(evt)),
-    }
-}
-
-fn error_response(request_id: u64, status: pb::Status, message: String) -> pb::Response {
-    pb::Response {
-        request_id,
-        status: status as i32,
-        message,
-        payload: None,
     }
 }
 

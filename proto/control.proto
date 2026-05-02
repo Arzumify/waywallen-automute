@@ -61,8 +61,14 @@ message Request {
 
 message Response {
   uint64 request_id = 1;
+  // Coarse status class, kept for back-compat with clients that haven't
+  // adopted `error_code` yet. Derived from `error_code` server-side.
   Status status = 2;
   string message = 3;
+  // Typed error pin-pointing the failure. `ERROR_CODE_OK` (0) on success;
+  // every non-OK value carries one specific failure category. New clients
+  // should branch on this and treat `status`/`message` as legacy fields.
+  ErrorCode error_code = 4;
   oneof payload {
     HealthResponse             health = 10;
     RendererSpawnResponse      renderer_spawn = 11;
@@ -105,6 +111,47 @@ enum Status {
   NOT_FOUND = 3;
   INTERNAL = 4;
   FAILED_PRECONDITION = 5;
+}
+
+// Typed failure code carried on every `Response`. `ERROR_CODE_OK` (0) means
+// success; every non-OK value pin-points one specific failure category.
+// Numeric ranges are reserved per subsystem so codes can be added without
+// collisions: generic 1–99, renderer 100–199, wallpaper/source 200–299,
+// settings 300–399, library 400–499, playlist 500–599.
+enum ErrorCode {
+  ERROR_CODE_OK = 0;
+
+  // Generic / framing
+  ERROR_CODE_INTERNAL = 1;
+  ERROR_CODE_DECODE = 2;
+  ERROR_CODE_INVALID_ARGUMENT = 3;
+  ERROR_CODE_UNEXPECTED_PAYLOAD = 4;     // empty `Request.payload`
+  ERROR_CODE_FAILED_PRECONDITION = 5;
+  ERROR_CODE_DB = 6;
+
+  // Renderers
+  ERROR_CODE_RENDERER_NOT_FOUND = 100;
+  ERROR_CODE_RENDERER_SPAWN_FAILED = 101;
+  ERROR_CODE_RENDERER_CONTROL_FAILED = 102;
+  ERROR_CODE_NO_RENDERER_FOR_TYPE = 103;
+  ERROR_CODE_RENDERER_TYPE_MISMATCH = 104;
+
+  // Wallpapers / sources
+  ERROR_CODE_WALLPAPER_NOT_FOUND = 200;
+  ERROR_CODE_NO_DISPLAY_REGISTERED = 201;
+  ERROR_CODE_SOURCE_PLUGIN_NOT_FOUND = 202;
+  ERROR_CODE_SOURCE_EXTRAS_FAILED = 203;
+
+  // Settings
+  ERROR_CODE_SETTINGS_VALIDATION_FAILED = 300;
+  ERROR_CODE_SETTINGS_APPLY_FAILED = 301;
+
+  // Libraries
+  ERROR_CODE_LIBRARY_NOT_FOUND = 400;
+
+  // Playlists
+  ERROR_CODE_PLAYLIST_NOT_FOUND = 500;
+  ERROR_CODE_PLAYLIST_INVALID = 501;
 }
 
 message Empty {}

@@ -12,6 +12,7 @@ mod display_endpoint;
 mod display_layout;
 mod display_proto;
 mod display_spawner;
+mod error;
 mod events;
 mod ipc;
 mod media_probe;
