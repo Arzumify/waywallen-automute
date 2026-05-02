@@ -369,29 +369,43 @@ MD.Page {
                     visible: !!root.selected
                 }
 
-                MD.Text {
-                    visible: !!root.selected
-                    text: "Layout"
-                    typescale: MD.Token.typescale.title_small
-                    color: MD.Token.color.on_surface
-                }
-
-                // Inline status: "Inherits global" vs "Overridden".
-                MD.Text {
+                RowLayout {
                     Layout.fillWidth: true
                     visible: !!root.selected
-                    typescale: MD.Token.typescale.body_small
-                    color: MD.Token.color.on_surface_variant
-                    text: {
-                        if (! root.selected) return "";
-                        const ovr = root.selected.layoutOverride || ({});
-                        const parts = [];
-                        if (ovr.fillmodeSet) parts.push("fill mode");
-                        if (ovr.alignSet) parts.push("align");
-                        if (ovr.clearRgbaSet) parts.push("clear color");
-                        return parts.length === 0
-                            ? "Inheriting all fields from global default."
-                            : "Overriding: " + parts.join(", ") + ".";
+                    spacing: 8
+
+                    MD.Text {
+                        Layout.fillWidth: true
+                        text: "Layout"
+                        typescale: MD.Token.typescale.title_small
+                        color: MD.Token.color.on_surface
+                    }
+
+                    // Single reset: clears every per-display override
+                    // for this display in one round-trip. Only shown
+                    // when at least one field is actually overridden.
+                    MD.IconButton {
+                        visible: {
+                            if (! root.selected) return false;
+                            const ovr = root.selected.layoutOverride || ({});
+                            return ovr.fillmodeSet === true
+                                || ovr.alignSet === true
+                                || ovr.clearRgbaSet === true;
+                        }
+                        icon.name: MD.Token.icon.refresh
+                        T.ToolTip.visible: hovered
+                        T.ToolTip.text: "Revert to global default"
+                        onClicked: {
+                            if (! root.selected) return;
+                            layoutSetQuery.name = root.selected.name;
+                            layoutSetQuery.fillmodeSet = false;
+                            layoutSetQuery.alignSet = false;
+                            layoutSetQuery.clearRgbaSet = false;
+                            layoutSetQuery.clearFillmode = true;
+                            layoutSetQuery.clearAlign = true;
+                            layoutSetQuery.clearClearRgba = true;
+                            layoutSetQuery.reload();
+                        }
                     }
                 }
 
@@ -410,53 +424,26 @@ MD.Page {
                             color: MD.Token.color.on_surface_variant
                         }
 
-                        RowLayout {
-                            spacing: 6
+                        MD.ComboBox {
+                            id: fillmodeBox
                             Layout.fillWidth: true
-
-                            MD.ComboBox {
-                                id: fillmodeBox
-                                Layout.fillWidth: true
-                                model: root.kFillModeLabels
-                                currentIndex: {
-                                    if (! root.selected) return 0;
-                                    const eff = root.selected.effectiveLayout || ({});
-                                    return root.fillmodeIndex(eff.fillmode || 0);
-                                }
-                                onActivated: idx => {
-                                    if (! root.selected) return;
-                                    layoutSetQuery.name = root.selected.name;
-                                    layoutSetQuery.fillmodeSet = true;
-                                    layoutSetQuery.fillmode = root.kFillModeValues[idx];
-                                    layoutSetQuery.alignSet = false;
-                                    layoutSetQuery.clearRgbaSet = false;
-                                    layoutSetQuery.clearFillmode = false;
-                                    layoutSetQuery.clearAlign = false;
-                                    layoutSetQuery.clearClearRgba = false;
-                                    layoutSetQuery.reload();
-                                }
+                            model: root.kFillModeLabels
+                            currentIndex: {
+                                if (! root.selected) return 0;
+                                const eff = root.selected.effectiveLayout || ({});
+                                return root.fillmodeIndex(eff.fillmode || 0);
                             }
-
-                            MD.IconButton {
-                                visible: {
-                                    if (! root.selected) return false;
-                                    const ovr = root.selected.layoutOverride || ({});
-                                    return ovr.fillmodeSet === true;
-                                }
-                                icon.name: MD.Token.icon.refresh
-                                T.ToolTip.visible: hovered
-                                T.ToolTip.text: "Revert to global default"
-                                onClicked: {
-                                    if (! root.selected) return;
-                                    layoutSetQuery.name = root.selected.name;
-                                    layoutSetQuery.fillmodeSet = false;
-                                    layoutSetQuery.alignSet = false;
-                                    layoutSetQuery.clearRgbaSet = false;
-                                    layoutSetQuery.clearFillmode = true;
-                                    layoutSetQuery.clearAlign = false;
-                                    layoutSetQuery.clearClearRgba = false;
-                                    layoutSetQuery.reload();
-                                }
+                            onActivated: idx => {
+                                if (! root.selected) return;
+                                layoutSetQuery.name = root.selected.name;
+                                layoutSetQuery.fillmodeSet = true;
+                                layoutSetQuery.fillmode = root.kFillModeValues[idx];
+                                layoutSetQuery.alignSet = false;
+                                layoutSetQuery.clearRgbaSet = false;
+                                layoutSetQuery.clearFillmode = false;
+                                layoutSetQuery.clearAlign = false;
+                                layoutSetQuery.clearClearRgba = false;
+                                layoutSetQuery.reload();
                             }
                         }
                     }
@@ -464,35 +451,10 @@ MD.Page {
                     ColumnLayout {
                         spacing: 4
 
-                        RowLayout {
-                            spacing: 6
-                            MD.Text {
-                                text: "Align"
-                                typescale: MD.Token.typescale.label_medium
-                                color: MD.Token.color.on_surface_variant
-                            }
-                            Item { Layout.fillWidth: true }
-                            MD.IconButton {
-                                visible: {
-                                    if (! root.selected) return false;
-                                    const ovr = root.selected.layoutOverride || ({});
-                                    return ovr.alignSet === true;
-                                }
-                                icon.name: MD.Token.icon.refresh
-                                T.ToolTip.visible: hovered
-                                T.ToolTip.text: "Revert to global default"
-                                onClicked: {
-                                    if (! root.selected) return;
-                                    layoutSetQuery.name = root.selected.name;
-                                    layoutSetQuery.fillmodeSet = false;
-                                    layoutSetQuery.alignSet = false;
-                                    layoutSetQuery.clearRgbaSet = false;
-                                    layoutSetQuery.clearFillmode = false;
-                                    layoutSetQuery.clearAlign = true;
-                                    layoutSetQuery.clearClearRgba = false;
-                                    layoutSetQuery.reload();
-                                }
-                            }
+                        MD.Text {
+                            text: "Align"
+                            typescale: MD.Token.typescale.label_medium
+                            color: MD.Token.color.on_surface_variant
                         }
 
                         // 3×3 grid of toggle pads. Disabled when the
