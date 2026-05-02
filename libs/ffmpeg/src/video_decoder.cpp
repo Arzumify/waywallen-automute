@@ -81,46 +81,22 @@ uint32_t map_range(int r) {
 
 /* `get_format` callback: prefer AV_PIX_FMT_VULKAN whenever the codec
  * offers it; fall back to whatever FFmpeg picks by default otherwise.
- * In shared-device mode this also allocates the codec's hw_frames_ctx
- * with DISABLE_MULTIPLANE so AVVkFrames come back as 2-image NV12
- * (img[0]=Y, img[1]=UV) — that's the format the GPU YUV→RGB shader
- * expects. */
+ *
+ * Do NOT pre-allocate cctx->hw_frames_ctx here. FFmpeg's
+ * ff_decode_get_hw_frames_ctx short-circuits when hw_frames_ctx is
+ * already set, which skips the vulkan hwaccel's frame_params callback
+ * — and that callback is what bootstraps FFVulkanDecodeContext::
+ * shared_ctx. Skipping it makes ff_vk_decode_init dereference a NULL
+ * shared_ctx (crash in ff_vk_init via &NULL->s == 0x0). Letting
+ * FFmpeg own the hw_frames_ctx means we accept whatever VkFormat it
+ * picks (typically the multi-plane VK_FORMAT_G8_B8R8_2PLANE_420_UNORM
+ * on AMD/RADV); the sw download path in next_frame doesn't care. */
 AVPixelFormat get_format_prefer_vulkan(AVCodecContext* cctx,
                                        const AVPixelFormat* fmts) {
-    bool offers_vulkan = false;
     for (const AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p) {
-        if (*p == AV_PIX_FMT_VULKAN) { offers_vulkan = true; break; }
+        if (*p == AV_PIX_FMT_VULKAN) return AV_PIX_FMT_VULKAN;
     }
-    if (!offers_vulkan) return avcodec_default_get_format(cctx, fmts);
-
-    /* Allocate hw_frames_ctx so we can opt into DISABLE_MULTIPLANE; if
-     * we leave it null FFmpeg auto-picks a format which on AMD/RADV is
-     * a multiplanar VK_FORMAT_G8_B8R8_2PLANE_420_UNORM that requires a
-     * VkSamplerYcbcrConversion-aware shader. Forcing 2-image NV12 lets
-     * us use the existing R8 + R8G8 sampler bindings. */
-    if (!cctx->hw_device_ctx) return AV_PIX_FMT_VULKAN;  /* FFmpeg-managed mode */
-    AVBufferRef* fr = av_hwframe_ctx_alloc(cctx->hw_device_ctx);
-    if (!fr) return avcodec_default_get_format(cctx, fmts);
-    auto* fc  = reinterpret_cast<AVHWFramesContext*>(fr->data);
-    fc->format    = AV_PIX_FMT_VULKAN;
-    /* Pick 8-bit NV12 by default; promote to 10-bit P010 when the
-     * codec context advertises >=10-bit per raw sample (h264 high10,
-     * hevc main10, AV1 10-bit, etc.). On AVHWFramesContext init failure
-     * we fall through to sw decode below. */
-    fc->sw_format = (cctx->bits_per_raw_sample >= 10)
-        ? AV_PIX_FMT_P010
-        : AV_PIX_FMT_NV12;
-    fc->width     = cctx->coded_width  > 0 ? cctx->coded_width  : cctx->width;
-    fc->height    = cctx->coded_height > 0 ? cctx->coded_height : cctx->height;
-    auto* vfc = reinterpret_cast<AVVulkanFramesContext*>(fc->hwctx);
-    vfc->flags = static_cast<AVVkFrameFlags>(vfc->flags | AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE);
-    if (av_hwframe_ctx_init(fr) < 0) {
-        av_buffer_unref(&fr);
-        /* Couldn't init disjoint NV12 — fall back to sw decode. */
-        return avcodec_default_get_format(cctx, fmts);
-    }
-    cctx->hw_frames_ctx = fr;
-    return AV_PIX_FMT_VULKAN;
+    return avcodec_default_get_format(cctx, fmts);
 }
 
 /* Build an AV_HWDEVICE_TYPE_VULKAN context wrapping the caller's
@@ -356,12 +332,14 @@ VideoDecoder::build_internal(const std::string& path,
         return nullptr;
     }
 
-    /* If get_format succeeded in producing a vulkan hw_frames_ctx we
-     * route through the zero-copy `next_vk_frame` path; otherwise
-     * (codec rejected vulkan / disjoint NV12 init failed) we fall back
-     * to the sw `next_frame` path with av_hwframe_transfer_data. */
-    self->using_vk_frames_ = pre_built_hwdev != nullptr
-                          && self->st_->cctx->hw_frames_ctx != nullptr;
+    /* The zero-copy next_vk_frame path requires DISABLE_MULTIPLANE
+     * AVVkFrames (img[0]=Y, img[1]=UV) to match the GPU YUV→RGB
+     * shader's R8 + R8G8 sampler bindings. We can't set that flag
+     * without bypassing FFmpeg's frame_params bootstrap (see comment
+     * on get_format_prefer_vulkan), so always route through the sw
+     * download path — av_hwframe_transfer_data handles whatever
+     * multi-plane format FFmpeg picked. */
+    self->using_vk_frames_ = false;
 
     self->st_->pkt.reset(av_packet_alloc());
     self->st_->src_frame.reset(av_frame_alloc());
