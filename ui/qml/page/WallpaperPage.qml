@@ -196,7 +196,7 @@ MD.Page {
                         // brand-new user (empty DB, no libraries) sees a
                         // BusyIndicator flash from the in-flight fetch
                         // even though the daemon isn't scanning anything.
-                        visible: m_grid_view.count === 0 && !wallpaperQuery.querying
+                        visible: m_grid_view.count === 0
 
                         // Daemon-side scan activity only. The list-fetch
                         // round-trip is a different concern and is gated
