@@ -308,6 +308,7 @@ pub async fn set_mode(app: &Arc<AppState>, mode: Mode) {
         s.global.queue_mode = mode.as_str().to_owned();
     });
     crate::dbus_iface::notify_queue_mode_changed(app).await;
+    crate::tray::dbusmenu::notify_menu_changed(app).await;
 }
 
 /// Set the auto-rotation interval (seconds; `0` disables). Updates
@@ -319,6 +320,7 @@ pub async fn set_rotation_interval(app: &Arc<AppState>, secs: u32) {
         s.global.rotation_secs = secs;
     });
     crate::dbus_iface::notify_rotation_secs_changed(app).await;
+    crate::tray::dbusmenu::notify_menu_changed(app).await;
 }
 
 /// Convenience: flip shuffle on/off without exposing the [`Mode`]

@@ -19,7 +19,7 @@
 //!
 //! Without a Watcher we record a warning and bail — the daemon keeps running.
 
-mod dbusmenu;
+pub mod dbusmenu;
 mod sni;
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use zbus::Connection;
 use crate::AppState;
 
 const ITEM_PATH: &str = "/StatusNotifierItem";
-const MENU_PATH: &str = "/MenuBar";
+pub const MENU_PATH: &str = "/MenuBar";
 const WATCHER_SERVICE: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 const WATCHER_IFACE: &str = "org.kde.StatusNotifierWatcher";

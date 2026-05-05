@@ -254,19 +254,40 @@ struct MenuState {
 }
 
 async fn snapshot_menu_state(app: &Arc<AppState>) -> MenuState {
-    let mode = app.queue.lock().await.mode;
+    // Read from settings — the canonical source. Queue's in-memory
+    // mode matches (Phase 5 keeps them in sync), but settings stays
+    // truthful even if the queue was just reset / not yet restored.
+    let g = app.settings.global();
     MenuState {
-        is_shuffle: matches!(mode, crate::queue::Mode::Shuffle),
-        rotation_secs: app.rotation.interval(),
+        is_shuffle: g.queue_mode == "shuffle",
+        rotation_secs: g.rotation_secs,
     }
 }
 
-// `LayoutUpdated` signal emission is intentionally omitted — KDE
-// Plasma's tray re-fetches `GetLayout` every time the menu is
-// re-opened, so the checkmark / radio state catches up on the next
-// click anyway. Wiring the signal would require stashing the zbus
-// `Connection` on `AppState`, which is more plumbing than the UX
-// improvement merits at this point.
+/// Best-effort `LayoutUpdated` emission. Called from `control::*`
+/// helpers when state that affects checkmark / radio rendering changes
+/// (mode toggle, rotation interval). Without this the radios in the
+/// Rotate submenu visually stack — KDE only re-fetches on menu
+/// re-open, so a single click while the menu is open looks
+/// multi-select.
+pub async fn notify_menu_changed(app: &AppState) {
+    let conn = match app.dbus_conn.lock().unwrap().clone() {
+        Some(c) => c,
+        None => return,
+    };
+    let iface = match conn
+        .object_server()
+        .interface::<_, DBusMenu>(crate::tray::MENU_PATH)
+        .await
+    {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    // Bump the layout revision; parent = ID_ROOT means "everything below
+    // root may have changed". KDE responds with a single GetLayout
+    // round-trip that walks the whole tree.
+    let _ = DBusMenu::layout_updated(iface.signal_context(), 1, ID_ROOT).await;
+}
 
 // ---------------------------------------------------------------------------
 // Static menu tree
