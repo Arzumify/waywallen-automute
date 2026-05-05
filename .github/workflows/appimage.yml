@@ -63,6 +63,11 @@ jobs:
       - name: Install freetype into conda env
         run: conda install -n waywallen conda-forge::freetype
 
+      - name: Debug freetype install
+        run: |
+          conda list -n waywallen | grep freetype
+          find /home/runner/miniconda/envs/waywallen -name '*freetype*'
+
       - name: Build AppImage
         run: bash ./scripts/build_appimage.sh
 
