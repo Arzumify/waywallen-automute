@@ -19,42 +19,30 @@ MD.Page {
     // FillMode/Align enum values mirror proto::FillMode / proto::Align
     // (control.proto). Keep the *_VALUES arrays in lockstep with the
     // enum order; *_LABELS is what the UI shows.
-    readonly property var kFillModeValues: [
-        1, // STRETCHED
-        2, // PRESERVE_ASPECT_FIT
-        3, // PRESERVE_ASPECT_CROP
-        7, // CENTERED
-        4, // TILED
-        5, // TILED_ONLY_HORIZONTAL
-        6  // TILED_ONLY_VERTICAL
+    readonly property var kFillModeValues: [1 // STRETCHED
+        , 2 // PRESERVE_ASPECT_FIT
+        , 3 // PRESERVE_ASPECT_CROP
+        , 7 // CENTERED
+        , 4 // TILED
+        , 5 // TILED_ONLY_HORIZONTAL
+        , 6  // TILED_ONLY_VERTICAL
     ]
-    readonly property var kFillModeLabels: [
-        "Stretch",
-        "Fit (preserve aspect)",
-        "Crop (preserve aspect)",
-        "Center (1:1)",
-        "Tile",
-        "Tile horizontally",
-        "Tile vertically"
-    ]
+    readonly property var kFillModeLabels: ["Stretch", "Fit (preserve aspect)", "Crop (preserve aspect)", "Center (1:1)", "Tile", "Tile horizontally", "Tile vertically"]
     function fillmodeIndex(value) {
         const i = root.kFillModeValues.indexOf(value);
         return i < 0 ? 0 : i;
     }
 
     // 3×3 align grid; index = row * 3 + col, values match proto::Align.
-    readonly property var kAlignValues: [
-        1, 2, 3, // top-left, top, top-right
-        4, 5, 6, // left, center, right
-        7, 8, 9  // bottom-left, bottom, bottom-right
+    readonly property var kAlignValues: [1, 2, 3 // top-left, top, top-right
+        , 4, 5, 6 // left, center, right
+        , 7, 8, 9  // bottom-left, bottom, bottom-right
     ]
-    readonly property var kAlignTooltips: [
-        "Top-left", "Top", "Top-right",
-        "Left", "Center", "Right",
-        "Bottom-left", "Bottom", "Bottom-right"
-    ]
+    readonly property var kAlignTooltips: ["Top-left", "Top", "Top-right", "Left", "Center", "Right", "Bottom-left", "Bottom", "Bottom-right"]
 
-    W.DisplayLayoutSetQuery { id: layoutSetQuery }
+    W.DisplayLayoutSetQuery {
+        id: layoutSetQuery
+    }
 
     function layoutRects() {
         const out = [];
@@ -327,7 +315,8 @@ MD.Page {
                 RowLayout {
                     id: connectedRendererRow
                     readonly property string connectedId: {
-                        if (!root.selected) return "";
+                        if (!root.selected)
+                            return "";
                         const links = root.selected.links || [];
                         return links.length > 0 ? (links[0].rendererId || "") : "";
                     }
@@ -337,26 +326,20 @@ MD.Page {
                     // without manual refresh.
                     readonly property var renderer: {
                         const _ = W.App.rendererManager.renderers;
-                        return connectedId.length > 0
-                            ? W.App.rendererManager.get(connectedId)
-                            : null;
+                        return connectedId.length > 0 ? W.App.rendererManager.get(connectedId) : null;
                     }
                     Layout.fillWidth: true
                     spacing: 8
 
                     MD.Icon {
-                        readonly property string status: connectedRendererRow.renderer
-                            ? connectedRendererRow.renderer.status : ""
+                        readonly property string status: connectedRendererRow.renderer ? connectedRendererRow.renderer.status : ""
                         name: {
-                            if (!connectedRendererRow.renderer) return MD.Token.icon.pause;
-                            return status === "paused"
-                                ? MD.Token.icon.pause
-                                : MD.Token.icon.play_arrow;
+                            if (!connectedRendererRow.renderer)
+                                return MD.Token.icon.pause;
+                            return status === "paused" ? MD.Token.icon.pause : MD.Token.icon.play_arrow;
                         }
                         size: 24
-                        color: !connectedRendererRow.renderer || status === "paused"
-                            ? MD.Token.color.on_surface_variant
-                            : MD.Token.color.primary
+                        color: !connectedRendererRow.renderer || status === "paused" ? MD.Token.color.on_surface_variant : MD.Token.color.primary
                     }
 
                     ColumnLayout {
@@ -377,9 +360,7 @@ MD.Page {
                                 return "Idle — no renderer connected.";
                             }
                             typescale: MD.Token.typescale.body_medium
-                            color: connectedRendererRow.renderer
-                                ? MD.Token.color.on_surface
-                                : MD.Token.color.on_surface_variant
+                            color: connectedRendererRow.renderer ? MD.Token.color.on_surface : MD.Token.color.on_surface_variant
                             font.family: connectedRendererRow.renderer ? "monospace" : ""
                             elide: Text.ElideMiddle
                         }
@@ -389,7 +370,8 @@ MD.Page {
                             visible: !!connectedRendererRow.renderer
                             text: {
                                 const r = connectedRendererRow.renderer;
-                                if (!r) return "";
+                                if (!r)
+                                    return "";
                                 return (r.status || "") + " · " + (r.fps || 0) + " fps";
                             }
                             typescale: MD.Token.typescale.label_small
@@ -419,31 +401,32 @@ MD.Page {
                         color: MD.Token.color.on_surface
                     }
 
-                    // Single reset: clears every per-display override
-                    // for this display in one round-trip. Only shown
-                    // when at least one field is actually overridden.
-                    MD.IconButton {
-                        mdState.size: MD.Enum.XS
-                        visible: {
-                            if (! root.selected) return false;
-                            const ovr = root.selected.layoutOverride || ({});
-                            return ovr.fillmodeSet === true
-                                || ovr.alignSet === true
-                                || ovr.clearRgbaSet === true;
-                        }
-                        icon.name: MD.Token.icon.refresh
-                        T.ToolTip.visible: hovered
-                        T.ToolTip.text: "Revert to global default"
-                        onClicked: {
-                            if (! root.selected) return;
-                            layoutSetQuery.name = root.selected.name;
-                            layoutSetQuery.fillmodeSet = false;
-                            layoutSetQuery.alignSet = false;
-                            layoutSetQuery.clearRgbaSet = false;
-                            layoutSetQuery.clearFillmode = true;
-                            layoutSetQuery.clearAlign = true;
-                            layoutSetQuery.clearClearRgba = true;
-                            layoutSetQuery.reload();
+                    Item {
+                        implicitWidth: children[0].implicitWidth
+                        MD.IconButton {
+                            anchors.verticalCenter: parent.verticalCenter
+                            mdState.size: MD.Enum.XS
+                            visible: {
+                                if (!root.selected)
+                                    return false;
+                                const ovr = root.selected.layoutOverride || ({});
+                                return ovr.fillmodeSet === true || ovr.alignSet === true || ovr.clearRgbaSet === true;
+                            }
+                            icon.name: MD.Token.icon.refresh
+                            T.ToolTip.visible: hovered
+                            T.ToolTip.text: "Revert to global default"
+                            onClicked: {
+                                if (!root.selected)
+                                    return;
+                                layoutSetQuery.name = root.selected.name;
+                                layoutSetQuery.fillmodeSet = false;
+                                layoutSetQuery.alignSet = false;
+                                layoutSetQuery.clearRgbaSet = false;
+                                layoutSetQuery.clearFillmode = true;
+                                layoutSetQuery.clearAlign = true;
+                                layoutSetQuery.clearClearRgba = true;
+                                layoutSetQuery.reload();
+                            }
                         }
                     }
                 }
@@ -468,12 +451,14 @@ MD.Page {
                             Layout.fillWidth: true
                             model: root.kFillModeLabels
                             currentIndex: {
-                                if (! root.selected) return 0;
+                                if (!root.selected)
+                                    return 0;
                                 const eff = root.selected.effectiveLayout || ({});
                                 return root.fillmodeIndex(eff.fillmode || 0);
                             }
                             onActivated: idx => {
-                                if (! root.selected) return;
+                                if (!root.selected)
+                                    return;
                                 layoutSetQuery.name = root.selected.name;
                                 layoutSetQuery.fillmodeSet = true;
                                 layoutSetQuery.fillmode = root.kFillModeValues[idx];
@@ -503,7 +488,8 @@ MD.Page {
                             rowSpacing: 4
                             columnSpacing: 4
                             enabled: {
-                                if (! root.selected) return false;
+                                if (!root.selected)
+                                    return false;
                                 const eff = root.selected.effectiveLayout || ({});
                                 // Stretched (1) ignores align.
                                 return (eff.fillmode || 0) !== 1;
@@ -517,7 +503,8 @@ MD.Page {
 
                                     readonly property int alignValue: root.kAlignValues[index]
                                     readonly property bool isCurrent: {
-                                        if (! root.selected) return false;
+                                        if (!root.selected)
+                                            return false;
                                         const eff = root.selected.effectiveLayout || ({});
                                         return (eff.align || 0) === alignValue;
                                     }
@@ -545,7 +532,8 @@ MD.Page {
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         onClicked: {
-                                            if (! root.selected) return;
+                                            if (!root.selected)
+                                                return;
                                             layoutSetQuery.name = root.selected.name;
                                             layoutSetQuery.fillmodeSet = false;
                                             layoutSetQuery.alignSet = true;
@@ -562,7 +550,9 @@ MD.Page {
                         }
                     }
 
-                    Item { Layout.fillWidth: true }
+                    Item {
+                        Layout.fillWidth: true
+                    }
                 }
             }
         }
