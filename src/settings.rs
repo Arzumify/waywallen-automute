@@ -29,7 +29,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::sync::Notify;
 
-use crate::display_layout::{Align, FillMode};
+use crate::display::layout::{Align, FillMode};
 
 /// Quiet period after the last `update()` before the debounced writer
 /// flushes to disk. Short enough that `Ctrl-C` shortly after a setting

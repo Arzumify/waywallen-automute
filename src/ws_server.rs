@@ -367,8 +367,8 @@ fn render_size_policy_from_pb(v: i32) -> crate::settings::RenderSizePolicy {
     }
 }
 
-fn fillmode_to_pb(fm: crate::display_layout::FillMode) -> pb::FillMode {
-    use crate::display_layout::FillMode as F;
+fn fillmode_to_pb(fm: crate::display::layout::FillMode) -> pb::FillMode {
+    use crate::display::layout::FillMode as F;
     match fm {
         F::Stretched => pb::FillMode::Stretched,
         F::PreserveAspectFit => pb::FillMode::PreserveAspectFit,
@@ -380,8 +380,8 @@ fn fillmode_to_pb(fm: crate::display_layout::FillMode) -> pb::FillMode {
     }
 }
 
-fn fillmode_from_pb(v: i32) -> Option<crate::display_layout::FillMode> {
-    use crate::display_layout::FillMode as F;
+fn fillmode_from_pb(v: i32) -> Option<crate::display::layout::FillMode> {
+    use crate::display::layout::FillMode as F;
     match pb::FillMode::try_from(v).ok()? {
         pb::FillMode::Unspecified => None,
         pb::FillMode::Stretched => Some(F::Stretched),
@@ -394,8 +394,8 @@ fn fillmode_from_pb(v: i32) -> Option<crate::display_layout::FillMode> {
     }
 }
 
-fn align_to_pb(a: crate::display_layout::Align) -> pb::Align {
-    use crate::display_layout::Align as A;
+fn align_to_pb(a: crate::display::layout::Align) -> pb::Align {
+    use crate::display::layout::Align as A;
     match a {
         A::TopLeft => pb::Align::TopLeft,
         A::Top => pb::Align::Top,
@@ -409,8 +409,8 @@ fn align_to_pb(a: crate::display_layout::Align) -> pb::Align {
     }
 }
 
-fn align_from_pb(v: i32) -> Option<crate::display_layout::Align> {
-    use crate::display_layout::Align as A;
+fn align_from_pb(v: i32) -> Option<crate::display::layout::Align> {
+    use crate::display::layout::Align as A;
     match pb::Align::try_from(v).ok()? {
         pb::Align::Unspecified => None,
         pb::Align::TopLeft => Some(A::TopLeft),

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use waywallen::display_proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
+use waywallen::display::proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
 
 #[derive(Debug)]
 struct Args {

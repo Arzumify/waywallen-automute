@@ -1,6 +1,6 @@
 //! Router — owns a `RoutingTable` plus a per-renderer subscription
 //! task. Translates renderer broadcasts and table mutations into
-//! per-display `DisplayOutEvent` streams that `display_endpoint`
+//! per-display `DisplayOutEvent` streams that `display::endpoint`
 //! consumes via plain mpsc.
 //!
 //! Phase 1 policy:
@@ -38,7 +38,7 @@ const IDLE_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 /// case orphans are reaped synchronously to free GPU memory promptly.
 const ORPHAN_REAP_TIMEOUT: Duration = Duration::from_secs(5);
 
-use crate::display_layout::{self, FillMode, LayoutInput};
+use crate::display::layout::{self, FillMode, LayoutInput};
 use crate::ipc::proto::{ControlMsg, EventMsg};
 use crate::renderer_manager::{
     DrmNode, RendererHandle, RendererId, RendererManager, BUF_HOST_VISIBLE,
@@ -82,7 +82,7 @@ pub enum DisplayOutEvent {
     },
 }
 
-/// Initial-registration payload from `display_endpoint::do_handshake`.
+/// Initial-registration payload from `display::endpoint::do_handshake`.
 pub struct DisplayRegistration {
     pub name: String,
     /// Stable identifier persisted by the consumer (e.g. UUID4 stored in
@@ -345,8 +345,8 @@ impl Router {
     pub async fn set_display_layout(
         self: &Arc<Self>,
         display_name: String,
-        new_fillmode: Option<crate::display_layout::FillMode>,
-        new_align: Option<crate::display_layout::Align>,
+        new_fillmode: Option<crate::display::layout::FillMode>,
+        new_align: Option<crate::display::layout::Align>,
         new_clear_rgba: Option<[f32; 4]>,
         clear_fillmode: bool,
         clear_align: bool,
@@ -1613,7 +1613,7 @@ impl Router {
 ///
 /// 1. If both rects are the `FULL_SRC`/`FULL_DST` sentinels (the
 ///    common case — Phase 1 auto-link, no explicit per-link geometry),
-///    delegate to `display_layout::compute()` so the user-configured
+///    delegate to `display::layout::compute()` so the user-configured
 ///    fillmode/align takes effect.
 /// 2. If either rect is explicit, that explicit geometry wins for
 ///    all four fields (preserves the future per-link composition
@@ -1637,7 +1637,7 @@ fn project_link(
 
     if src_full && dst_full {
         let (tex_w, tex_h) = renderer.texture_size();
-        let out = display_layout::compute(LayoutInput {
+        let out = crate::display::layout::compute(LayoutInput {
             tex_w: tex_w as f32,
             tex_h: tex_h as f32,
             disp_w: info.width as f32,
@@ -2353,7 +2353,7 @@ mod tests {
         let link = make_link("r1", 1);
         let layout = ResolvedLayout {
             fillmode: FillMode::PreserveAspectFit,
-            align: crate::display_layout::Align::Top,
+            align: crate::display::layout::Align::Top,
             clear_rgba: [0.2, 0.4, 0.6, 1.0],
         };
         let cfg = project_link(&link, &renderer, &info, 7, &layout);
@@ -2369,7 +2369,7 @@ mod tests {
     #[test]
     fn project_link_explicit_link_geometry_skips_layout() {
         // A link with explicit (non-sentinel) src/dst rects should
-        // bypass display_layout::compute and pass the rects through
+        // bypass display::layout::compute and pass the rects through
         // verbatim — even if the resolved layout wants something else.
         let renderer = RendererHandle::test_stub("r1", "scene");
         let info = make_info("eDP-1", 1280, 720);

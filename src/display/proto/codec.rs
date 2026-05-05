@@ -13,7 +13,7 @@
 //! `expected_fds()`.
 //!
 //! Tokio / async integration is deferred: today the only in-tree user
-//! that needs this codec is `display_endpoint`, which already wraps
+//! that needs this codec is `display::endpoint`, which already wraps
 //! its I/O in `tokio::task::spawn_blocking` (same model as
 //! `ipc::uds`). When a first-class async client appears we'll add a
 //! tokio adapter on top.
@@ -247,7 +247,7 @@ fn read_framed(sock: &UnixStream) -> CodecResult<(u16, Vec<u8>, Vec<OwnedFd>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::display_proto::generated::Rect;
+    use crate::display::proto::generated::Rect;
     use std::os::fd::IntoRawFd;
 
     fn pair() -> (UnixStream, UnixStream) {

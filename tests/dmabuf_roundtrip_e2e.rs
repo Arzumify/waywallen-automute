@@ -32,7 +32,7 @@
 //!
 //! - **Phase 2:** per-pair end-to-end run (this commit lights up
 //!   `per_pair_byte_roundtrip`). For each pair we stand up an
-//!   in-process `RendererManager + Router + display_endpoint::serve`,
+//!   in-process `RendererManager + Router + endpoint::serve`,
 //!   spawn the C++ image renderer with `WAYWALLEN_IMAGE_DUMP_DIR`
 //!   pointing at a tempdir, spawn `dump_display` with `--dump-dir`
 //!   pointing at a sibling tempdir, drive a single frame, and then
@@ -163,7 +163,7 @@ fn caps_discovery_intersection_is_non_empty() {
 
 /// Phase 2: per-pair byte-level round-trip. For every pair in the
 /// caps intersection, spin up Router + RendererManager +
-/// display_endpoint inside the test, spawn the C++ image renderer
+/// display::endpoint inside the test, spawn the C++ image renderer
 /// (with `WAYWALLEN_IMAGE_DUMP_DIR` set so it writes its pre-upload
 /// RGBA8 to a producer dump), spawn `dump_display` (with `--dump-dir`
 /// set so it writes its post-readback RGBA8 to a consumer dump), let
@@ -319,14 +319,14 @@ async fn run_one_pair(
     let endpoint_router = router.clone();
     let endpoint_sock = sock.clone();
     let endpoint_task = tokio::spawn(async move {
-        if let Err(e) = waywallen::display_endpoint::serve_with_shutdown(
+        if let Err(e) = waywallen::display::endpoint::serve_with_shutdown(
             &endpoint_sock,
             endpoint_router,
             shutdown_rx,
         )
         .await
         {
-            log::warn!("display_endpoint exited: {e}");
+            log::warn!("display::endpoint exited: {e}");
         }
     });
 

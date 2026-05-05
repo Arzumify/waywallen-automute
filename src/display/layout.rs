@@ -93,7 +93,7 @@ pub fn compute(i: LayoutInput) -> LayoutOutput {
     let fillmode = match i.fillmode {
         FillMode::Tiled | FillMode::TiledOnlyHorizontally | FillMode::TiledOnlyVertically => {
             log::warn!(
-                "display_layout: fillmode {:?} not yet expressible on the wire; \
+                "display::layout: fillmode {:?} not yet expressible on the wire; \
                  falling back to PreserveAspectFit",
                 i.fillmode
             );

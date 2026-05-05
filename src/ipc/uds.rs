@@ -13,7 +13,7 @@
 //!
 //! This module intentionally uses `std::os::unix::net::UnixStream`
 //! (not Tokio). Async callers are expected to wrap calls in
-//! `spawn_blocking`, the same model `display_endpoint` uses.
+//! `spawn_blocking`, the same model `display::endpoint` uses.
 
 use crate::ipc::generated::{DecodeError, Event, Request};
 use nix::sys::socket::{recvmsg, sendmsg, ControlMessage, ControlMessageOwned, MsgFlags};

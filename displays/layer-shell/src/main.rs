@@ -34,7 +34,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
 
-use waywallen::display_proto::{
+use waywallen::display::proto::{
     codec, Event as ProtoEvent, Request as ProtoRequest, PROTOCOL_NAME, PROTOCOL_VERSION,
 };
 

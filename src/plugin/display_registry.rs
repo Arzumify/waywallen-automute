@@ -6,7 +6,7 @@
 //! + `--plugin PATH/displays/`), same "relative `bin` is resolved against
 //! the TOML's directory" gotcha.
 //!
-//! Selection happens in `display_spawner`; this module is just storage +
+//! Selection happens in `display::spawner`; this module is just storage +
 //! scan. Registry entries are ordered by descending `priority`.
 
 use anyhow::{Context, Result};
@@ -50,7 +50,7 @@ pub struct DisplayDef {
     pub de: Vec<String>,
     #[serde(default = "default_priority")]
     pub priority: i32,
-    /// Optional capability tokens this backend needs. `display_spawner`
+    /// Optional capability tokens this backend needs. `display::spawner`
     /// intersects these with probed Wayland globals (`wlr-layer-shell`,
     /// `linux-dmabuf-v4`, …). Empty = no preconditions.
     #[serde(default)]

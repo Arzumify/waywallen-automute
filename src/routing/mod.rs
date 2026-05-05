@@ -2,7 +2,7 @@
 //!
 //! Phase 1 introduces an explicit `Router` that owns a `RoutingTable`
 //! (renderers, displays, links) plus a per-renderer subscription task.
-//! The `display_endpoint` no longer subscribes to renderer broadcasts
+//! The `display::endpoint` no longer subscribes to renderer broadcasts
 //! directly — it receives `DisplayOutEvent`s on a per-display mpsc
 //! produced by the router.
 //!

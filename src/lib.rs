@@ -1,7 +1,5 @@
 pub mod control_proto;
-pub mod display_endpoint;
-pub mod display_layout;
-pub mod display_proto;
+pub mod display;
 pub mod error;
 pub mod events;
 pub mod ipc;

@@ -1,7 +1,7 @@
 //! Per-renderer release-fence reaper.
 //!
 //! Owns a Tokio task that drains [`FrameRecord`]s from
-//! `display_endpoint::forward_frame_ready`. Each frame fanned out to a
+//! `display::endpoint::forward_frame_ready`. Each frame fanned out to a
 //! consumer produces one record carrying:
 //!
 //!   - the producer-assigned `release_point` (the timeline value the
@@ -56,7 +56,7 @@ const BUCKET_TIMEOUT: Duration = Duration::from_millis(500);
 /// module docs).
 const WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Per-frame work item produced by `display_endpoint::forward_frame_ready`
+/// Per-frame work item produced by `display::endpoint::forward_frame_ready`
 /// and consumed by [`spawn_reaper`].
 pub struct FrameRecord {
     pub release_point: u64,

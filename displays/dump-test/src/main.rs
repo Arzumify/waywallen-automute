@@ -36,7 +36,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use waywallen::display_proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
+use waywallen::display::proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
 use waywallen::sync::DrmDevice;
 
 mod vk_consumer;

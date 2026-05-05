@@ -7,8 +7,8 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::display_proto::generated::Rect;
-use crate::display_proto::{
+use crate::display::proto::generated::Rect;
+use crate::display::proto::{
     codec, error_code, opcode, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION,
 };
 // Display-protocol failures are all daemon-internal (this layer talks
@@ -585,7 +585,7 @@ fn build_bind_event(snap: &BindSnapshot) -> Result<(Event, Vec<RawFd>)> {
         size: snap.size.clone(),
     };
     log::debug!(
-        "display_endpoint: build_bind_event gen={} count={} planes={} {}x{} \
+        "display::endpoint: build_bind_event gen={} count={} planes={} {}x{} \
          fourcc=0x{:08x} mod=0x{:016x}",
         buffer_generation,
         count,

@@ -8,10 +8,7 @@ use media_probe::{AvFormatProbe, MediaProbe};
 mod control;
 mod control_proto;
 mod dbus_iface;
-mod display_endpoint;
-mod display_layout;
-mod display_proto;
-mod display_spawner;
+mod display;
 mod error;
 mod events;
 mod ipc;
@@ -343,7 +340,7 @@ async fn async_main() -> anyhow::Result<()> {
             }
         }
     }
-    let display_caps = display_spawner::detect_de();
+    let display_caps = display::spawner::detect_de();
     let display_backend: Option<plugin::display_registry::DisplayDef> = if cli.no_display {
         log::info!("--no-display: skipping display backend selection");
         None
@@ -352,23 +349,23 @@ async fn async_main() -> anyhow::Result<()> {
             match display_registry.find(name) {
                 Some(def) => {
                     log::info!("display backend pinned by --display-backend: {name}");
-                    display_spawner::PickOutcome::Matched(def.clone())
+                    display::spawner::PickOutcome::Matched(def.clone())
                 }
                 None => {
                     log::error!(
                         "--display-backend {name} not found in registry; falling back to auto-detect"
                     );
-                    display_spawner::pick_backend(&display_registry, &display_caps)
+                    display::spawner::pick_backend(&display_registry, &display_caps)
                 }
             }
         } else {
-            display_spawner::pick_backend(&display_registry, &display_caps)
+            display::spawner::pick_backend(&display_registry, &display_caps)
         };
-        display_spawner::log_outcome(&pick, &display_caps);
-        let should_spawn = display_spawner::should_daemon_spawn(&pick);
+        display::spawner::log_outcome(&pick, &display_caps);
+        let should_spawn = display::spawner::should_daemon_spawn(&pick);
         match pick {
-            display_spawner::PickOutcome::KdeHardMatch(def)
-            | display_spawner::PickOutcome::Matched(def)
+            display::spawner::PickOutcome::KdeHardMatch(def)
+            | display::spawner::PickOutcome::Matched(def)
                 if should_spawn =>
             {
                 Some(def)
@@ -377,7 +374,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
     };
 
-    let display_sock_path = display_endpoint::default_socket_path();
+    let display_sock_path = display::endpoint::default_socket_path();
     {
         let router = router.clone();
         let sock_path = display_sock_path.clone();
@@ -385,7 +382,7 @@ async fn async_main() -> anyhow::Result<()> {
         state
             .tasks
             .spawn_async(tasks::TaskKind::Service, "display/endpoint", async move {
-                display_endpoint::serve_with_shutdown(&sock_path, router, shutdown_rx)
+                display::endpoint::serve_with_shutdown(&sock_path, router, shutdown_rx)
                     .await
                     .map_err(|e| anyhow::anyhow!("display endpoint exited: {e}"))
             });
@@ -398,7 +395,7 @@ async fn async_main() -> anyhow::Result<()> {
             tasks::TaskKind::Service,
             format!("display/backend/{name}"),
             async move {
-                display_spawner::run_backend(def, sock_path, shutdown_rx)
+                display::spawner::run_backend(def, sock_path, shutdown_rx)
                     .await
                     .map_err(|e| anyhow::anyhow!("display backend supervisor exited: {e}"))
             },

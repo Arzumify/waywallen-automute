@@ -11,7 +11,7 @@ mod handshake {
     use super::common;
     // End-to-end smoke test for the `waywallen-display-v1` handshake.
     //
-    // Spins up a real `display_endpoint::serve` task bound to a tempfile
+    // Spins up a real `endpoint::serve` task bound to a tempfile
     // socket, connects a client through the generated codec, and walks
     // the protocol up through `display_accepted`. Bind/SetConfig/FrameReady
     // are NOT exercised here because a real `BindSnapshot` requires a
@@ -31,8 +31,8 @@ mod handshake {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use waywallen::display_endpoint;
-    use waywallen::display_proto::{
+    use waywallen::display::endpoint;
+    use waywallen::display::proto::{
         codec, error_code, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION,
     };
     use waywallen::renderer_manager::RendererManager;
@@ -49,7 +49,7 @@ mod handshake {
         let sock_for_task = sock.clone();
         let router_for_task = Arc::clone(&router);
         let server_task = tokio::spawn(async move {
-            let _ = display_endpoint::serve(&sock_for_task, router_for_task).await;
+            let _ = endpoint::serve(&sock_for_task, router_for_task).await;
         });
 
         assert!(
@@ -151,7 +151,7 @@ mod handshake {
         let server_task = tokio::spawn({
             let router = Arc::clone(&router);
             async move {
-                let _ = display_endpoint::serve(&sock_for_task, router).await;
+                let _ = endpoint::serve(&sock_for_task, router).await;
             }
         });
 
@@ -204,7 +204,7 @@ mod handshake {
         let server_task = tokio::spawn({
             let router = Arc::clone(&router);
             async move {
-                let _ = display_endpoint::serve(&sock_for_task, router).await;
+                let _ = endpoint::serve(&sock_for_task, router).await;
             }
         });
 
@@ -282,8 +282,8 @@ mod sync_fd_fanout {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use waywallen::display_endpoint;
-    use waywallen::display_proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
+    use waywallen::display::endpoint;
+    use waywallen::display::proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
     use waywallen::renderer_manager::{RendererManager, SpawnRequest};
     use waywallen::routing::Router;
 
@@ -403,7 +403,7 @@ mod sync_fd_fanout {
         let sock2 = sock.clone();
         let router2 = Arc::clone(&router);
         let server = tokio::spawn(async move {
-            let _ = display_endpoint::serve(&sock2, router2).await;
+            let _ = endpoint::serve(&sock2, router2).await;
         });
 
         assert!(
@@ -473,7 +473,7 @@ mod sync_fd_single {
     // End-to-end smoke test: a real Vulkan `waywallen_renderer` subprocess
     // produces real `dma_fence` sync_fds on every `FrameReady`, those fds
     // survive the `renderer_manager::run_reader` harvest, and
-    // `display_endpoint` forwards them to a connected client as the
+    // `display::endpoint` forwards them to a connected client as the
     // acquire fence fd on `Event::FrameReady`.
     //
     // Uses the in-process RendererManager + Router rig (no HTTP layer, no
@@ -485,8 +485,8 @@ mod sync_fd_single {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use waywallen::display_endpoint;
-    use waywallen::display_proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
+    use waywallen::display::endpoint;
+    use waywallen::display::proto::{codec, Event, Request, PROTOCOL_NAME, PROTOCOL_VERSION};
     use waywallen::renderer_manager::{RendererManager, SpawnRequest};
     use waywallen::routing::Router;
 
@@ -511,7 +511,7 @@ mod sync_fd_single {
         let sock_for_task = sock.clone();
         let router_for_task = Arc::clone(&router);
         let server = tokio::spawn(async move {
-            let _ = display_endpoint::serve(&sock_for_task, router_for_task).await;
+            let _ = endpoint::serve(&sock_for_task, router_for_task).await;
         });
 
         assert!(
