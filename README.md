@@ -45,7 +45,7 @@ It started life as a Wallpaper Engine plugin for KDE.
 | Image wallpapers | ✅ |
 | Scene wallpapers | ✅ via [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) |
 | Video wallpapers | ✅ |
-| Web wallpapers | ⚠️ planned |
+| Web wallpapers | ✅ via [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) |
 
 ## Configuration
 
