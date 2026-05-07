@@ -419,6 +419,11 @@ pub struct RendererManager {
     /// unlinked from the routing table in lockstep with being evicted
     /// from our map.
     router: OnceLock<StdWeak<Router>>,
+    /// Cached `/dev/dri` enumeration from startup. Used at spawn time to
+    /// translate per-plugin `gpu_drm_dev = "<major>:<minor>"` settings into
+    /// a `render_node` path injected into `Init.settings`. Empty vec if
+    /// `attach_gpus` was never called (test stub).
+    gpus: OnceLock<Arc<Vec<crate::gpu::GpuInfo>>>,
     /// Dead-renderer signals queue here (from reader-thread exit or
     /// a send_control hitting EPIPE). A single background reaper task
     /// drains the channel and runs the async `evict` — routing it
@@ -442,9 +447,17 @@ impl RendererManager {
             }),
             registry,
             router: OnceLock::new(),
+            gpus: OnceLock::new(),
             reap_tx,
             reap_rx: StdMutex::new(Some(reap_rx)),
         }
+    }
+
+    /// Hand the manager the startup `/dev/dri` snapshot so spawn-time can
+    /// resolve `gpu_drm_dev` selections into `render_node` paths.
+    /// Idempotent: further calls are no-ops.
+    pub fn attach_gpus(&self, gpus: Arc<Vec<crate::gpu::GpuInfo>>) {
+        let _ = self.gpus.set(gpus);
     }
 
     /// Wire the manager to the router. Must be called once after both
@@ -501,7 +514,7 @@ impl RendererManager {
     /// Spawn a fresh renderer-host subprocess, wait for its `Ready`
     /// event, and return its id. Fails (and cleans up the child) if the
     /// host doesn't come online within `timeout`.
-    pub async fn spawn(&self, req: SpawnRequest) -> Result<RendererId> {
+    pub async fn spawn(&self, mut req: SpawnRequest) -> Result<RendererId> {
         let id: RendererId = Uuid::new_v4().to_string();
 
         // Create a listening UDS at a temp path; the child connects to
@@ -527,6 +540,34 @@ impl RendererManager {
                 .ok_or_else(|| Error::NoRendererForType(req.wp_type.clone()))?
                 .clone(),
         };
+
+        // 把用户的 GPU 选择翻成 render_node 路径再交给子进程：plugin
+        // settings 里持久化的是 `gpu_drm_dev = "<major>:<minor>"`（与
+        // wire 上的 drm_render_major/minor 对齐），子进程契约消费的是
+        // `render_node` 路径。命中则注入 render_node 并把 gpu_drm_dev
+        // 从下发设置里剔除；不命中（启动 reconcile 该清未清的兜底）
+        // 不注入，让子进程走默认设备选择。
+        if let Some(raw) = req.settings.remove(crate::gpu::GPU_DRM_DEV_KEY) {
+            if let Some((major, minor)) = crate::gpu::parse_drm_dev(&raw) {
+                let resolved = self
+                    .gpus
+                    .get()
+                    .and_then(|gs| gs.iter().find(|g| g.matches_render(major, minor)))
+                    .and_then(|g| g.render_node.as_ref())
+                    .and_then(|p| p.to_str().map(str::to_string));
+                if let Some(path) = resolved {
+                    req.settings
+                        .insert(crate::gpu::RENDER_NODE_KEY.to_string(), path);
+                } else {
+                    log::warn!(
+                        "spawn: gpu_drm_dev={raw} not in /dev/dri enumeration; \
+                         dropping selection and letting renderer pick default"
+                    );
+                }
+            } else {
+                log::warn!("spawn: gpu_drm_dev={raw:?} not parseable as <major>:<minor>");
+            }
+        }
 
         // Build the Init message *before* spawning the child (no
         // orphan socket file lingering past TempUnlink if anything

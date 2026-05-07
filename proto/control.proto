@@ -58,6 +58,7 @@ message Request {
     PlaylistDeactivateRequest playlist_deactivate = 38;
     PlaylistStatusRequest     playlist_status = 39;
     DisplayLayoutSetRequest   display_layout_set = 40;
+    GpuListRequest            gpu_list = 41;
   }
 }
 
@@ -103,6 +104,7 @@ message Response {
     Empty                      playlist_deactivate = 38;
     PlaylistStatusResponse     playlist_status = 39;
     DisplayLayoutSetResponse   display_layout_set = 40;
+    GpuListResponse            gpu_list = 41;
   }
 }
 
@@ -194,6 +196,12 @@ message RendererInstance {
   string status      = 3; // "playing" | "paused"
   string name        = 4; // renderer plugin name from RendererDef.name
   uint32 pid         = 5; // OS pid of the renderer child; 0 if unknown
+  // DRM render-node id of the GPU this renderer's Vulkan instance picked,
+  // sourced from its `Ready` event. Both 0 ⇒ unknown (driver lacks
+  // VK_EXT_physical_device_drm). UI cross-references against `GpuList` to
+  // show a human description.
+  uint32 drm_render_major = 6;
+  uint32 drm_render_minor = 7;
 }
 
 message RendererPlayRequest  { string renderer_id = 1; }
@@ -420,6 +428,12 @@ message DisplayInfo {
   // The raw per-display override (sparse). UI binds to this for the
   // edit form so it can show "inherit" vs. explicit values.
   LayoutOverride layout_override = 8;
+  // DRM render-node id of the GPU this display's consumer is on, sourced
+  // from `register_display` in the waywallen-display protocol. Both 0 ⇒
+  // unknown (the display backend did not query it). UI cross-references
+  // against `GpuList` to show a human description.
+  uint32 drm_render_major = 9;
+  uint32 drm_render_minor = 10;
 }
 
 message DisplayListRequest {}
@@ -775,4 +789,32 @@ message PlaylistStatusResponse {
   uint32       position = 5;
   uint32       count = 6;
   bool         is_smart = 7;
+}
+
+// ---------------------------------------------------------------------------
+// GPU enumeration
+// ---------------------------------------------------------------------------
+//
+// Snapshot of the host's DRM devices. Daemon walks /dev/dri + sysfs at
+// startup (see `gpu::enumerate`) and caches the result; this message
+// surfaces it to the UI. Pair with `RendererInstance.drm_render_major/minor`
+// and `DisplayInfo.drm_render_major/minor` to label which GPU each
+// renderer / display is currently on.
+message GpuInfo {
+  string render_node    = 1;   // empty if no render node (rare: vgem etc.)
+  string primary_node   = 2;   // empty if no primary node
+  uint32 render_major   = 3;
+  uint32 render_minor   = 4;
+  uint32 primary_major  = 5;
+  uint32 primary_minor  = 6;
+  string pci_bdf        = 7;   // "0000:03:00.0" — empty if not a PCI device
+  uint32 vendor_id      = 8;   // PCI vendor (0x1002 / 0x10de / 0x8086 …)
+  uint32 device_id      = 9;   // PCI device
+  string driver         = 10;  // kernel driver basename: "amdgpu" / "i915" / "nvidia"
+  string description    = 11;  // best-effort human label
+}
+
+message GpuListRequest {}
+message GpuListResponse {
+  repeated GpuInfo gpus = 1;
 }

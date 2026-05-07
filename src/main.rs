@@ -12,6 +12,7 @@ mod display;
 mod dma;
 mod error;
 mod events;
+mod gpu;
 mod ipc;
 mod model;
 mod queue;
@@ -39,6 +40,11 @@ pub struct AppState {
     pub source_snapshot: Arc<tokio::sync::RwLock<plugin::source_snapshot::SourceSnapshot>>,
     pub router: Arc<routing::Router>,
     pub settings: Arc<settings::SettingsStore>,
+    /// Snapshot of `/dev/dri` taken at startup. Read-only after construction;
+    /// surfaced to UI via `GpuListRequest` and used by `RendererManager`
+    /// to translate per-plugin `gpu_drm_dev` settings into `render_node`
+    /// paths injected into Init.settings.
+    pub gpus: Arc<Vec<gpu::GpuInfo>>,
     pub db: sea_orm::DatabaseConnection,
     pub queue: tokio::sync::Mutex<control::QueueState>,
     /// Auto-rotation control handle. The rotator task watches the
@@ -278,6 +284,48 @@ async fn async_main() -> anyhow::Result<()> {
         settings::SettingsStore::load_or_default(settings::default_config_path()).await;
     router.attach_settings(settings_store.clone());
     settings_store.reconcile(renderer_mgr.registry());
+
+    let gpus = Arc::new(gpu::enumerate());
+    renderer_mgr.attach_gpus(gpus.clone());
+    log::info!("gpu::enumerate found {} GPU(s)", gpus.len());
+    for g in gpus.iter() {
+        log::debug!(
+            "  gpu: render={:?} primary={:?} drm={}:{} pci={:?} {} ({:#06x}:{:#06x})",
+            g.render_node,
+            g.primary_node,
+            g.render_major,
+            g.render_minor,
+            g.pci_bdf,
+            g.driver,
+            g.vendor_id,
+            g.device_id,
+        );
+    }
+    {
+        let valid: std::collections::HashSet<(u32, u32)> = gpus
+            .iter()
+            .filter(|g| g.render_node.is_some())
+            .map(|g| (g.render_major, g.render_minor))
+            .collect();
+        settings_store.update(|s| {
+            for (plugin_name, kv) in s.plugins.iter_mut() {
+                let stale = kv.get(gpu::GPU_DRM_DEV_KEY).is_some_and(|v| {
+                    gpu::parse_drm_dev(v)
+                        .map(|p| !valid.contains(&p))
+                        .unwrap_or(true)
+                });
+                if stale {
+                    let removed = kv.remove(gpu::GPU_DRM_DEV_KEY);
+                    log::warn!(
+                        "clearing stale {} for plugin {}: was {:?}",
+                        gpu::GPU_DRM_DEV_KEY,
+                        plugin_name,
+                        removed
+                    );
+                }
+            }
+        });
+    }
     let db_path = settings::default_db_path();
     let db = model::connect(&db_path)
         .await
@@ -306,6 +354,7 @@ async fn async_main() -> anyhow::Result<()> {
         source_snapshot,
         router: router.clone(),
         settings: settings_store,
+        gpus,
         db: db.clone(),
         queue: tokio::sync::Mutex::new(control::QueueState::default()),
         rotation: rotation_handle,

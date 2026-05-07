@@ -189,6 +189,8 @@ pub struct RendererSnapshot {
     pub name: String,
     pub status: RendererStatus,
     pub pid: u32,
+    pub drm_render_major: u32,
+    pub drm_render_minor: u32,
 }
 
 /// Read-only view of a registered display. Returned from
@@ -202,6 +204,8 @@ pub struct DisplaySnapshot {
     pub height: u32,
     pub refresh_mhz: u32,
     pub links: Vec<DisplayLinkSnapshot>,
+    pub drm_render_major: u32,
+    pub drm_render_minor: u32,
 }
 
 struct DisplayState {
@@ -976,6 +980,8 @@ impl Router {
             height: s.info.height,
             refresh_mhz: s.info.refresh_mhz,
             links,
+            drm_render_major: s.gpu.major,
+            drm_render_minor: s.gpu.minor,
         })
     }
 
@@ -995,6 +1001,8 @@ impl Router {
             name: handle.name.clone(),
             status,
             pid: handle.pid.unwrap_or(0),
+            drm_render_major: handle.gpu.major,
+            drm_render_minor: handle.gpu.minor,
         })
     }
 
@@ -1019,6 +1027,8 @@ impl Router {
                     name: handle.name.clone(),
                     status,
                     pid: handle.pid.unwrap_or(0),
+                    drm_render_major: handle.gpu.major,
+                    drm_render_minor: handle.gpu.minor,
                 })
             })
             .collect()
@@ -1051,6 +1061,8 @@ impl Router {
                     height: s.info.height,
                     refresh_mhz: s.info.refresh_mhz,
                     links,
+                    drm_render_major: s.gpu.major,
+                    drm_render_minor: s.gpu.minor,
                 })
             })
             .collect()

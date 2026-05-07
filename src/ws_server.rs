@@ -225,6 +225,32 @@ async fn handle_conn(
 // RouterEvent → pb::Event translation
 // ---------------------------------------------------------------------------
 
+fn gpu_info_to_pb(g: &crate::gpu::GpuInfo) -> pb::GpuInfo {
+    pb::GpuInfo {
+        render_node: g
+            .render_node
+            .as_ref()
+            .and_then(|p| p.to_str())
+            .map(str::to_string)
+            .unwrap_or_default(),
+        primary_node: g
+            .primary_node
+            .as_ref()
+            .and_then(|p| p.to_str())
+            .map(str::to_string)
+            .unwrap_or_default(),
+        render_major: g.render_major,
+        render_minor: g.render_minor,
+        primary_major: g.primary_major,
+        primary_minor: g.primary_minor,
+        pci_bdf: g.pci_bdf.clone().unwrap_or_default(),
+        vendor_id: g.vendor_id as u32,
+        device_id: g.device_id as u32,
+        driver: g.driver.clone(),
+        description: g.description.clone(),
+    }
+}
+
 fn display_snapshot_to_pb(s: DisplaySnapshot, settings: &SettingsStore) -> pb::DisplayInfo {
     let resolved = settings.resolved_layout(&s.name);
     let override_prefs = settings.display_prefs(&s.name).unwrap_or_default();
@@ -244,6 +270,8 @@ fn display_snapshot_to_pb(s: DisplaySnapshot, settings: &SettingsStore) -> pb::D
             .collect(),
         effective_layout: Some(layout_prefs_to_pb_resolved(&resolved)),
         layout_override: Some(layout_override_to_pb(&override_prefs)),
+        drm_render_major: s.drm_render_major,
+        drm_render_minor: s.drm_render_minor,
     }
 }
 
@@ -380,6 +408,8 @@ fn renderer_snapshot_to_pb(s: RendererSnapshot, settings: &SettingsStore) -> pb:
         status: s.status.as_str().to_string(),
         name: s.name,
         pid: s.pid,
+        drm_render_major: s.drm_render_major,
+        drm_render_minor: s.drm_render_minor,
     }
 }
 
@@ -603,10 +633,11 @@ async fn dispatch_inner(
             let ids = state.renderer_manager.list().await;
             let mut instances = Vec::with_capacity(ids.len());
             for id in &ids {
-                let (name, pid) = match state.renderer_manager.get(id).await {
-                    Some(h) => (h.name.clone(), h.pid.unwrap_or(0)),
-                    None => (String::new(), 0),
-                };
+                let (name, pid, drm_render_major, drm_render_minor) =
+                    match state.renderer_manager.get(id).await {
+                        Some(h) => (h.name.clone(), h.pid.unwrap_or(0), h.gpu.major, h.gpu.minor),
+                        None => (String::new(), 0, 0, 0),
+                    };
                 // fps lives in the plugin section of the settings store
                 // now (`Settings::reconcile` already enforces the
                 // schema). 0 = unknown / unset.
@@ -626,6 +657,8 @@ async fn dispatch_inner(
                     status: status.into(),
                     name,
                     pid,
+                    drm_render_major,
+                    drm_render_minor,
                 });
             }
             Res::RendererList(pb::RendererListResponse {
@@ -837,6 +870,15 @@ async fn dispatch_inner(
                 .map(|d| display_snapshot_to_pb(d, &state.settings))
                 .collect();
             Res::DisplayList(pb::DisplayListResponse { displays })
+        }
+
+        Req::GpuList(_) => {
+            let gpus = state
+                .gpus
+                .iter()
+                .map(gpu_info_to_pb)
+                .collect();
+            Res::GpuList(pb::GpuListResponse { gpus })
         }
 
         Req::DisplayLayoutSet(r) => {

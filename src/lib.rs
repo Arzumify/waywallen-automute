@@ -3,6 +3,7 @@ pub mod display;
 pub mod dma;
 pub mod error;
 pub mod events;
+pub mod gpu;
 pub mod ipc;
 pub mod model;
 pub mod queue;
