@@ -388,12 +388,19 @@ async fn run_frame_loop(
                     log::info!("display {display_id}: bye");
                     break Ok(());
                 }
-                Some(Ok(Request::MouseEvent { kind, x, y, properties: _ })) => {
-                    // Reserved — wire format is final but the router does
-                    // not consume mouse events yet. Future work will fan
-                    // these out to interactive renderers.
+                Some(Ok(Request::PointerMotion { x, y, .. })) => {
                     log::debug!(
-                        "display {display_id}: mouse_event kind={kind} x={x} y={y} (reserved, dropped)"
+                        "display {display_id}: pointer_motion x={x} y={y} (reserved, dropped)"
+                    );
+                }
+                Some(Ok(Request::PointerButton { x, y, button, state, .. })) => {
+                    log::debug!(
+                        "display {display_id}: pointer_button x={x} y={y} button={button} state={state} (reserved, dropped)"
+                    );
+                }
+                Some(Ok(Request::PointerAxis { x, y, delta_x, delta_y, source, .. })) => {
+                    log::debug!(
+                        "display {display_id}: pointer_axis x={x} y={y} dx={delta_x} dy={delta_y} source={source} (reserved, dropped)"
                     );
                 }
                 Some(Ok(other)) => {
