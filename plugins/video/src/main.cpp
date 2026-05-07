@@ -112,23 +112,25 @@ void signal_shutdown(HostState& s) {
 
 void apply_control(HostState& host, ww_bridge_control_t& c) {
     switch (c.op) {
-    case WW_REQ_INIT:
+    case WW_EVT_IN_INIT:
         std::fprintf(stderr,
                      "waywallen-video-renderer: unexpected late Init; ignoring\n");
         break;
-    case WW_REQ_PLAY:
+    case WW_EVT_IN_PLAY:
         host.paused.store(false, std::memory_order_release);
         host.neg_cv.notify_all();
         break;
-    case WW_REQ_PAUSE:
+    case WW_EVT_IN_PAUSE:
         host.paused.store(true, std::memory_order_release);
         break;
-    case WW_REQ_MOUSE:
-    case WW_REQ_SET_FPS:
+    case WW_EVT_IN_SET_FPS:
+    case WW_EVT_IN_POINTER_MOTION:
+    case WW_EVT_IN_POINTER_BUTTON:
+    case WW_EVT_IN_POINTER_AXIS:
         break;
-    case WW_REQ_APPLY_SETTINGS: {
-        ww_bridge_apply_settings_t as {};
-        if (ww_bridge_apply_settings_from_control(&c, &as) != 0) break;
+    case WW_EVT_IN_SETTING_CHANGED: {
+        ww_bridge_setting_changed_t as {};
+        if (ww_bridge_setting_changed_from_control(&c, &as) != 0) break;
         for (uint32_t i = 0; i < as.settings.count; ++i) {
             const char* key = as.settings.data[i].key;
             const char* val = as.settings.data[i].value;
@@ -145,14 +147,14 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
                              key);
             }
         }
-        ww_bridge_apply_settings_free(&as);
+        ww_bridge_setting_changed_free(&as);
         host.neg_cv.notify_all();
         break;
     }
-    case WW_REQ_SHUTDOWN:
+    case WW_EVT_IN_SHUTDOWN:
         signal_shutdown(host);
         break;
-    case WW_REQ_NEGOTIATE_BUFFERS: {
+    case WW_EVT_IN_NEGOTIATE_BUFFERS: {
         const auto& nb = c.u.negotiate_buffers;
         ww_pool_directive_t d {};
         d.category    = nb.path;

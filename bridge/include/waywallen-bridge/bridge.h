@@ -316,20 +316,22 @@ void ww_bridge_log_gpu_info(const char *prefix,
  * High-level control receive (daemon -> subprocess)
  * ----------------------------------------------------------------------- */
 
-/* Tagged union of all incoming control requests. `op` selects which
- * union arm is populated. String fields inside are heap-allocated —
- * call `ww_bridge_control_free` when done. */
+/* Tagged union of all incoming inbound events from the daemon. `op`
+ * selects which union arm is populated. String / kv fields inside are
+ * heap-allocated — call `ww_bridge_control_free` when done. */
 typedef struct ww_bridge_control {
-    ww_request_op_t op;
+    ww_event_in_op_t op;
     union {
-        ww_req_init_t               init;
-        ww_req_apply_settings_t     apply_settings;
-        ww_req_play_t               play;
-        ww_req_pause_t              pause;
-        ww_req_mouse_t              mouse;
-        ww_req_set_fps_t            set_fps;
-        ww_req_shutdown_t           shutdown;
-        ww_req_negotiate_buffers_t  negotiate_buffers;
+        ww_evt_in_init_t               init;
+        ww_evt_in_setting_changed_t    setting_changed;
+        ww_evt_in_play_t               play;
+        ww_evt_in_pause_t              pause;
+        ww_evt_in_pointer_motion_t     pointer_motion;
+        ww_evt_in_pointer_button_t     pointer_button;
+        ww_evt_in_pointer_axis_t       pointer_axis;
+        ww_evt_in_set_fps_t            set_fps;
+        ww_evt_in_shutdown_t           shutdown;
+        ww_evt_in_negotiate_buffers_t  negotiate_buffers;
     } u;
 } ww_bridge_control_t;
 
@@ -366,10 +368,10 @@ void ww_bridge_control_free(ww_bridge_control_t *msg);
  * ----------------------------------------------------------------------- */
 
 /* Spawn-payload version this build of the bridge handles. Bump when
- * the wire shape of `ww_req_init_t` (or `ww_bridge_init_t`) changes;
+ * the wire shape of `ww_evt_in_init_t` (or `ww_bridge_init_t`) changes;
  * `ww_bridge_recv_init` validates the value sent by the daemon
  * matches and returns -EPROTO otherwise. */
-#define WW_BRIDGE_SUPPORTED_SPAWN_VERSION 3u
+#define WW_BRIDGE_SUPPORTED_SPAWN_VERSION 4u
 
 /* Interpretation of the daemon's `extent_w`/`extent_h` hints in
  * `ww_bridge_init_t`. See <waywallen-bridge/extent_resolve.h> for the
@@ -388,7 +390,7 @@ typedef enum ww_extent_mode {
 
 /* Caller-friendly view of the typed Init payload (SPAWN_VERSION 3).
  * The kv list is heap-owned (transferred from the underlying
- * `ww_req_init_t` decode); call `ww_bridge_init_free` exactly once
+ * `ww_evt_in_init_t` decode); call `ww_bridge_init_free` exactly once
  * after consumption.
  *
  * Resource path + plugin-specific extras (assets, workshop_id, …)
@@ -408,7 +410,7 @@ typedef struct ww_bridge_init {
  *
  * Behaviour:
  *   - Blocks until the next control frame arrives.
- *   - If the message is anything other than `WW_REQ_INIT`, the body
+ *   - If the message is anything other than `WW_EVT_IN_INIT`, the body
  *     is freed and -EPROTO is returned.
  *   - If `spawn_version != WW_BRIDGE_SUPPORTED_SPAWN_VERSION`, the
  *     decoded value lands in `out->spawn_version` so the caller can
@@ -439,37 +441,85 @@ int ww_bridge_send_init_nack(int sock,
 
 
 /* -----------------------------------------------------------------------
- * ApplySettings — runtime hot-reload of plugin settings (SPAWN_VERSION 3)
+ * setting_changed — runtime hot-reload of plugin settings
  *
- * The daemon fires `apply_settings` over a live renderer's IPC socket
+ * The daemon fires `setting_changed` over a live renderer's IPC socket
  * whenever a non-identity plugin setting changes — e.g. `loop_file` /
  * `hwdec` for mpv, `volume` for wescene, `fps` for any plugin whose
  * manifest declares it. The whole payload is a kv list (same shape
  * as `init.settings`); no typed scalars are promoted.
  * ----------------------------------------------------------------------- */
 
-/* Caller-friendly view of the apply_settings payload. Backing storage
- * lives in the underlying `ww_bridge_control_t::u.apply_settings`;
+/* Caller-friendly view of the setting_changed payload. Backing storage
+ * lives in the underlying `ww_bridge_control_t::u.setting_changed`;
  * `_from_control` transfers ownership of the heap kv list into this
- * struct, so the caller MUST call `ww_bridge_apply_settings_free`
+ * struct, so the caller MUST call `ww_bridge_setting_changed_free`
  * exactly once (NOT `ww_bridge_control_free`) when done. */
-typedef struct ww_bridge_apply_settings {
+typedef struct ww_bridge_setting_changed {
     ww_kv_list_t settings;
-} ww_bridge_apply_settings_t;
+} ww_bridge_setting_changed_t;
 
-/* Peel the apply_settings typed view out of a generic control message.
+/* Peel the setting_changed typed view out of a generic control message.
  * On success, ownership of the heap kv list moves from `ctrl` into
- * `out`; `ctrl->u.apply_settings.settings` is zeroed so a follow-up
+ * `out`; `ctrl->u.setting_changed.settings` is zeroed so a follow-up
  * `ww_bridge_control_free(ctrl)` is a no-op for that arm.
- * Returns 0 on success, -EINVAL if `ctrl->op != WW_REQ_APPLY_SETTINGS`
+ * Returns 0 on success, -EINVAL if `ctrl->op != WW_EVT_IN_SETTING_CHANGED`
  * or either pointer is NULL. */
-int ww_bridge_apply_settings_from_control(ww_bridge_control_t *ctrl,
-                                          ww_bridge_apply_settings_t *out);
+int ww_bridge_setting_changed_from_control(ww_bridge_control_t *ctrl,
+                                           ww_bridge_setting_changed_t *out);
 
 /* Release every heap allocation inside `out`. Safe to call on a
  * zero-initialized struct or after a successful free. Always returns
  * with `out` cleared. */
-void ww_bridge_apply_settings_free(ww_bridge_apply_settings_t *out);
+void ww_bridge_setting_changed_free(ww_bridge_setting_changed_t *out);
+
+
+/* -----------------------------------------------------------------------
+ * Pointer events — optional, gated by manifest `events = ["pointer"]`
+ *
+ * The daemon forwards these only when the renderer's manifest declared
+ * the "pointer" subscription. They are POD copies of the wire payload,
+ * with no heap-owned fields, so no _free is required. The semantics of
+ * (button, state, source, modifiers) mirror waywallen-display-v1's
+ * pointer events.
+ * ----------------------------------------------------------------------- */
+
+typedef struct ww_bridge_pointer_motion {
+    float    x;
+    float    y;
+    uint64_t timestamp_us;
+    uint32_t modifiers;
+} ww_bridge_pointer_motion_t;
+
+typedef struct ww_bridge_pointer_button {
+    float    x;
+    float    y;
+    uint32_t button;
+    uint32_t state;
+    uint64_t timestamp_us;
+    uint32_t modifiers;
+} ww_bridge_pointer_button_t;
+
+typedef struct ww_bridge_pointer_axis {
+    float    x;
+    float    y;
+    float    delta_x;
+    float    delta_y;
+    uint32_t source;
+    uint64_t timestamp_us;
+    uint32_t modifiers;
+} ww_bridge_pointer_axis_t;
+
+/* Peel a pointer-event view out of a generic control message. POD
+ * copies — `ctrl` keeps no resources, so a trailing
+ * `ww_bridge_control_free(ctrl)` is still safe (and a no-op for the
+ * pointer arms). Returns -EINVAL when `ctrl->op` doesn't match. */
+int ww_bridge_pointer_motion_from_control(ww_bridge_control_t *ctrl,
+                                          ww_bridge_pointer_motion_t *out);
+int ww_bridge_pointer_button_from_control(ww_bridge_control_t *ctrl,
+                                          ww_bridge_pointer_button_t *out);
+int ww_bridge_pointer_axis_from_control(ww_bridge_control_t *ctrl,
+                                        ww_bridge_pointer_axis_t *out);
 
 
 #ifdef __cplusplus

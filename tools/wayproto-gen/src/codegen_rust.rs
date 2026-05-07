@@ -16,16 +16,20 @@
 //! writes the body; `decode` only consumes the body. Ancillary fds are
 //! passed out-of-band by the codec layer.
 
-use crate::parser::{ArgType, FdSpec, Message, Protocol};
+use crate::parser::{ArgType, FdSpec, InboundKind, Message, Protocol};
 use std::fmt::Write;
 
 pub fn emit(p: &Protocol) -> String {
     let mut out = String::new();
+    let (in_enum, in_mod) = match p.inbound_kind {
+        InboundKind::Request => ("Request", "request"),
+        InboundKind::EventIn => ("EventIn", "event_in"),
+    };
     emit_header(&mut out, p);
-    emit_consts(&mut out, p);
+    emit_consts(&mut out, p, in_mod);
     emit_common_types(&mut out);
     emit_wire_helpers(&mut out);
-    emit_enum(&mut out, "Request", &p.requests, "request");
+    emit_enum(&mut out, in_enum, &p.requests, in_mod);
     emit_enum(&mut out, "Event", &p.events, "event");
     out
 }
@@ -40,7 +44,7 @@ fn emit_header(out: &mut String, p: &Protocol) {
     writeln!(out).unwrap();
 }
 
-fn emit_consts(out: &mut String, p: &Protocol) {
+fn emit_consts(out: &mut String, p: &Protocol, in_mod: &str) {
     writeln!(
         out,
         "pub const PROTOCOL_NAME: &str = \"{}-v{}\";",
@@ -51,7 +55,7 @@ fn emit_consts(out: &mut String, p: &Protocol) {
     writeln!(out, "pub const PROTOCOL_VERSION: u32 = {};", p.version).unwrap();
     writeln!(out).unwrap();
     writeln!(out, "pub mod opcode {{").unwrap();
-    writeln!(out, "    pub mod request {{").unwrap();
+    writeln!(out, "    pub mod {in_mod} {{").unwrap();
     for m in &p.requests {
         writeln!(
             out,

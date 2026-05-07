@@ -998,6 +998,7 @@ baz = "7"
             spawn_version: Some(1),
             extras: Vec::new(),
             settings: s,
+            events: Vec::new(),
         });
         r
     }

@@ -24,7 +24,7 @@ use crate::ipc::uds::{recv_event, send_control, CodecError};
 /// Spawn-time `Init` payload version the daemon currently emits. Bump
 /// this when the wire shape of `ControlMsg::Init` changes; renderers
 /// reply with `EventMsg::InitNack` if they don't recognise the value.
-pub const SPAWN_VERSION: u32 = 3;
+pub const SPAWN_VERSION: u32 = 4;
 use crate::plugin::renderer_registry::{RendererDef, RendererRegistry};
 use crate::routing::Router;
 use crate::wallpaper_type::WallpaperType;
@@ -248,6 +248,13 @@ pub struct RendererHandle {
 
     /// The child process. Kept alive so dropping the manager reaps it.
     child: Arc<TokioMutex<Option<Child>>>,
+
+    /// Inbound-event family subscriptions copied from the renderer's
+    /// manifest at spawn time. Pointer-event senders consult this to
+    /// decide whether to encode (subscribed) or silently drop. Strings
+    /// are validated against the recognised set in
+    /// `RendererRegistry::scan`.
+    events_subscribed: Arc<Vec<String>>,
 }
 
 impl RendererHandle {
@@ -501,6 +508,7 @@ impl RendererManager {
                 spawn_version: None,
                 extras: Vec::new(),
                 settings: Default::default(),
+                events: Vec::new(),
             });
         }
         Self::new(registry)
@@ -714,6 +722,7 @@ impl RendererManager {
             frame_record_tx,
             pending_configure,
             child: Arc::new(TokioMutex::new(Some(child))),
+            events_subscribed: Arc::new(renderer_def.events.clone()),
         });
 
         if handle.frame_record_tx.is_some() {
@@ -878,8 +887,8 @@ impl RendererManager {
         Ok(())
     }
 
-    /// Push an `ApplySettings` to a live renderer. `settings` is the
-    /// delta the caller already filtered to runtime-only keys
+    /// Push a `setting_changed` event to a live renderer. `settings` is
+    /// the delta the caller already filtered to runtime-only keys
     /// (identity-tagged settings would force respawn, not hot-reload).
     /// `fps == None` is the no-fps-change signal; `Some(0)` is treated
     /// as "no change" too — the wire format uses 0 as the unset
@@ -887,9 +896,8 @@ impl RendererManager {
     ///
     /// On success the renderer's `runtime_settings` cache is merged
     /// with `settings` so the next reuse comparison sees the post-apply
-    /// state. No idempotence cache for now (Step 4-lite); each call
-    /// sends.
-    pub async fn send_apply_settings(
+    /// state. No idempotence cache for now; each call sends.
+    pub async fn send_setting_changed(
         &self,
         id: &str,
         settings: Vec<(String, String)>,
@@ -899,10 +907,10 @@ impl RendererManager {
             .get(id)
             .await
             .ok_or_else(|| Error::RendererNotFound(id.to_string()))?;
-        // SPAWN_VERSION 3: ApplySettings is a pure kv list. fps is
-        // just one of the kv keys (when the manifest declares it),
-        // not a typed scalar. Fold the legacy `fps_change` arg into
-        // the kv list before dispatch.
+        // setting_changed is a pure kv list. fps is just one of the kv
+        // keys (when the manifest declares it), not a typed scalar.
+        // Fold the legacy `fps_change` arg into the kv list before
+        // dispatch.
         let mut settings = settings;
         if let Some(f) = fps {
             if f != 0 {
@@ -910,16 +918,114 @@ impl RendererManager {
                 settings.push(("fps".to_string(), f.to_string()));
             }
         }
-        let msg = ControlMsg::ApplySettings {
+        let msg = ControlMsg::SettingChanged {
             settings: settings.clone(),
         };
         log::info!(
-            "renderer {id}: ApplySettings keys={:?}",
+            "renderer {id}: setting_changed keys={:?}",
             settings.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
         );
         self.send_control(id, msg).await?;
         let _ = handle;
         Ok(())
+    }
+
+    /// Forward a pointer-motion event to a live renderer. Silently
+    /// drops when the renderer's manifest didn't declare
+    /// `events = ["pointer"]` — this is the expected gating point for
+    /// any inbound pointer family event.
+    pub async fn send_pointer_motion(
+        &self,
+        id: &str,
+        x: f32,
+        y: f32,
+        timestamp_us: u64,
+        modifiers: u32,
+    ) -> Result<()> {
+        if !self.subscribed_to(id, "pointer").await {
+            return Ok(());
+        }
+        self.send_control(
+            id,
+            ControlMsg::PointerMotion {
+                x,
+                y,
+                timestamp_us,
+                modifiers,
+            },
+        )
+        .await
+    }
+
+    /// Forward a pointer-button event. Same gating as
+    /// [`Self::send_pointer_motion`].
+    pub async fn send_pointer_button(
+        &self,
+        id: &str,
+        x: f32,
+        y: f32,
+        button: u32,
+        state: u32,
+        timestamp_us: u64,
+        modifiers: u32,
+    ) -> Result<()> {
+        if !self.subscribed_to(id, "pointer").await {
+            return Ok(());
+        }
+        self.send_control(
+            id,
+            ControlMsg::PointerButton {
+                x,
+                y,
+                button,
+                state,
+                timestamp_us,
+                modifiers,
+            },
+        )
+        .await
+    }
+
+    /// Forward a pointer-axis (scroll) event. Same gating as
+    /// [`Self::send_pointer_motion`].
+    pub async fn send_pointer_axis(
+        &self,
+        id: &str,
+        x: f32,
+        y: f32,
+        delta_x: f32,
+        delta_y: f32,
+        source: u32,
+        timestamp_us: u64,
+        modifiers: u32,
+    ) -> Result<()> {
+        if !self.subscribed_to(id, "pointer").await {
+            return Ok(());
+        }
+        self.send_control(
+            id,
+            ControlMsg::PointerAxis {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                source,
+                timestamp_us,
+                modifiers,
+            },
+        )
+        .await
+    }
+
+    /// Returns `true` when the renderer is alive and its manifest
+    /// declared `events = [..., kind, ...]`. Unknown id ⇒ `false`
+    /// (caller treats that as "drop on floor"; it's the same handling
+    /// `send_*` use for unsubscribed renderers).
+    async fn subscribed_to(&self, id: &str, kind: &str) -> bool {
+        match self.get(id).await {
+            Some(h) => h.events_subscribed.iter().any(|e| e == kind),
+            None => false,
+        }
     }
 
     /// Enqueue a renderer for eviction. Synchronous (cheap channel
@@ -1431,6 +1537,7 @@ impl RendererHandle {
             frame_record_tx: None,
             pending_configure: Arc::new(StdMutex::new(None)),
             child: Arc::new(TokioMutex::new(None)),
+            events_subscribed: Arc::new(Vec::new()),
         })
     }
 
@@ -1487,6 +1594,7 @@ mod init_handshake_tests {
             spawn_version: None,
             extras: Vec::new(),
             settings: Default::default(),
+            events: Vec::new(),
         }
     }
 
@@ -1500,6 +1608,7 @@ mod init_handshake_tests {
             spawn_version: Some(1),
             extras: vec!["assets".into(), "workshop_id".into()],
             settings: Default::default(),
+            events: Vec::new(),
         }
     }
 
@@ -1522,6 +1631,7 @@ mod init_handshake_tests {
             spawn_version: Some(1),
             extras: Vec::new(),
             settings: ps,
+            events: Vec::new(),
         }
     }
 
@@ -1662,6 +1772,7 @@ mod reuse_tests {
             spawn_version: Some(1),
             extras: Vec::new(),
             settings: ps,
+            events: Vec::new(),
         }
     }
 
@@ -1691,6 +1802,7 @@ mod reuse_tests {
             frame_record_tx: None,
             pending_configure: Arc::new(StdMutex::new(None)),
             child: Arc::new(TokioMutex::new(None)),
+            events_subscribed: Arc::new(Vec::new()),
         })
     }
 
@@ -1744,9 +1856,9 @@ mod reuse_tests {
     }
 
     #[tokio::test]
-    async fn send_apply_settings_writes_wire_and_updates_cache() {
+    async fn send_setting_changed_writes_wire_and_updates_cache() {
         // Direct end-to-end: spawn a socketpair, plug one side into a
-        // RendererHandle's sock, call send_apply_settings, drain the
+        // RendererHandle's sock, call send_setting_changed, drain the
         // wire on the other side, assert the kv arrived.
         let mut registry = RendererRegistry::new();
         registry.register(def_mpv());
@@ -1777,6 +1889,7 @@ mod reuse_tests {
             frame_record_tx: None,
             pending_configure: Arc::new(StdMutex::new(None)),
             child: Arc::new(TokioMutex::new(None)),
+            events_subscribed: Arc::new(Vec::new()),
         });
         mgr.register_test_handle(Arc::clone(&h)).await;
 
@@ -1786,13 +1899,13 @@ mod reuse_tests {
             req
         });
 
-        mgr.send_apply_settings("h1", vec![("loop_file".into(), "no".into())], None)
+        mgr.send_setting_changed("h1", vec![("loop_file".into(), "no".into())], None)
             .await
-            .expect("send_apply_settings ok");
+            .expect("send_setting_changed ok");
 
         let got = peer.join().expect("peer joined");
         match got {
-            ControlMsg::ApplySettings { settings } => {
+            ControlMsg::SettingChanged { settings } => {
                 assert_eq!(settings, vec![("loop_file".into(), "no".into())]);
             }
             other => panic!("expected ApplySettings, got {other:?}"),

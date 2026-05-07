@@ -13,7 +13,7 @@
 //!   - Event messages become `ww_evt_<name>_t`.
 //!   - Opcode enum values: `WW_REQ_<NAME>` / `WW_EVT_<NAME>`.
 
-use crate::parser::{ArgType, FdSpec, Message, Protocol};
+use crate::parser::{ArgType, FdSpec, InboundKind, Message, Protocol};
 use std::fmt::Write;
 
 // ---------------------------------------------------------------------------
@@ -21,17 +21,18 @@ use std::fmt::Write;
 // ---------------------------------------------------------------------------
 
 pub fn emit_header(p: &Protocol) -> String {
+    let inbound = MsgKind::inbound_for(p.inbound_kind);
     let mut out = String::new();
     emit_header_prologue(&mut out, p);
     emit_common_types(&mut out);
-    emit_opcodes(&mut out, p);
+    emit_opcodes(&mut out, p, inbound);
     for m in &p.requests {
-        emit_message_struct(&mut out, m, MsgKind::Request);
+        emit_message_struct(&mut out, m, inbound);
     }
     for m in &p.events {
         emit_message_struct(&mut out, m, MsgKind::Event);
     }
-    emit_function_decls(&mut out, p);
+    emit_function_decls(&mut out, p, inbound);
     emit_header_epilogue(&mut out);
     out
 }
@@ -43,20 +44,36 @@ pub fn emit_header(p: &Protocol) -> String {
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum MsgKind {
     Request,
+    EventIn,
     Event,
 }
 
 impl MsgKind {
+    fn inbound_for(k: InboundKind) -> Self {
+        match k {
+            InboundKind::Request => Self::Request,
+            InboundKind::EventIn => Self::EventIn,
+        }
+    }
     fn prefix(self) -> &'static str {
         match self {
             Self::Request => "ww_req_",
+            Self::EventIn => "ww_evt_in_",
             Self::Event => "ww_evt_",
         }
     }
     fn enum_prefix(self) -> &'static str {
         match self {
             Self::Request => "WW_REQ_",
+            Self::EventIn => "WW_EVT_IN_",
             Self::Event => "WW_EVT_",
+        }
+    }
+    fn enum_typedef(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Request => ("ww_request_op", "ww_request_op_t"),
+            Self::EventIn => ("ww_event_in_op", "ww_event_in_op_t"),
+            Self::Event => ("ww_event_op", "ww_event_op_t"),
         }
     }
 }
@@ -177,23 +194,25 @@ typedef struct ww_buf {
     );
 }
 
-fn emit_opcodes(out: &mut String, p: &Protocol) {
+fn emit_opcodes(out: &mut String, p: &Protocol, inbound: MsgKind) {
     writeln!(out, "/* --- Opcodes --- */").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "typedef enum ww_request_op {{").unwrap();
+    let (in_tag, in_typedef) = inbound.enum_typedef();
+    writeln!(out, "typedef enum {in_tag} {{").unwrap();
     for m in &p.requests {
         writeln!(
             out,
             "    {}{} = {},",
-            MsgKind::Request.enum_prefix(),
+            inbound.enum_prefix(),
             m.name.to_uppercase(),
             m.opcode
         )
         .unwrap();
     }
-    writeln!(out, "}} ww_request_op_t;").unwrap();
+    writeln!(out, "}} {in_typedef};").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "typedef enum ww_event_op {{").unwrap();
+    let (out_tag, out_typedef) = MsgKind::Event.enum_typedef();
+    writeln!(out, "typedef enum {out_tag} {{").unwrap();
     for m in &p.events {
         writeln!(
             out,
@@ -204,7 +223,7 @@ fn emit_opcodes(out: &mut String, p: &Protocol) {
         )
         .unwrap();
     }
-    writeln!(out, "}} ww_event_op_t;").unwrap();
+    writeln!(out, "}} {out_typedef};").unwrap();
     writeln!(out).unwrap();
 }
 
@@ -230,7 +249,7 @@ fn emit_message_struct(out: &mut String, m: &Message, kind: MsgKind) {
     writeln!(out).unwrap();
 }
 
-fn emit_function_decls(out: &mut String, p: &Protocol) {
+fn emit_function_decls(out: &mut String, p: &Protocol, inbound: MsgKind) {
     writeln!(out, "/* --- Per-message functions ---").unwrap();
     writeln!(
         out,
@@ -256,7 +275,7 @@ fn emit_function_decls(out: &mut String, p: &Protocol) {
     writeln!(out).unwrap();
 
     for m in &p.requests {
-        emit_message_decls(out, m, MsgKind::Request);
+        emit_message_decls(out, m, inbound);
     }
     for m in &p.events {
         emit_message_decls(out, m, MsgKind::Event);
@@ -309,8 +328,12 @@ pub fn emit_source(p: &Protocol) -> String {
     .unwrap();
     writeln!(out, "/* Source: protocol/{}_v{}.xml */", p.name, p.version).unwrap();
     writeln!(out).unwrap();
+    // The header lives next to bridge consumers under
+    // <waywallen-bridge/ipc_v1.h> per CMake's include path conventions
+    // for this protocol; emit that include literally so the generated
+    // source compiles in-tree without further plumbing.
     out.push_str(
-        r#"#include "ww_proto.h"
+        r#"#include "waywallen-bridge/ipc_v1.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -700,8 +723,9 @@ static void free_kv_list(ww_kv_list_t *a) {
 "#,
     );
 
+    let inbound = MsgKind::inbound_for(p.inbound_kind);
     for m in &p.requests {
-        emit_message_impl(&mut out, m, MsgKind::Request);
+        emit_message_impl(&mut out, m, inbound);
     }
     for m in &p.events {
         emit_message_impl(&mut out, m, MsgKind::Event);

@@ -15,7 +15,7 @@
 //! (not Tokio). Async callers are expected to wrap calls in
 //! `spawn_blocking`, the same model `display::endpoint` uses.
 
-use crate::ipc::generated::{DecodeError, Event, Request};
+use crate::ipc::generated::{DecodeError, Event, EventIn};
 use nix::sys::socket::{recvmsg, sendmsg, ControlMessage, ControlMessageOwned, MsgFlags};
 use std::io::{IoSlice, IoSliceMut, Read};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
@@ -91,7 +91,7 @@ pub type CodecResult<T> = Result<T, CodecError>;
 // ---------------------------------------------------------------------------
 
 /// Send a control message (daemon → subprocess).
-pub fn send_control(sock: &UnixStream, req: &Request, fds: &[RawFd]) -> CodecResult<()> {
+pub fn send_control(sock: &UnixStream, req: &EventIn, fds: &[RawFd]) -> CodecResult<()> {
     if fds.len() > MAX_FDS_PER_MSG {
         return Err(CodecError::TooManyFds(fds.len()));
     }
@@ -128,7 +128,7 @@ pub fn send_event(sock: &UnixStream, evt: &Event, fds: &[RawFd]) -> CodecResult<
 /// other call sites that previously used the generic `send_msg` with a
 /// `ControlMsg` don't need rewriting.
 #[inline]
-pub fn send_msg_control(sock: &UnixStream, msg: &Request, fds: &[RawFd]) -> CodecResult<()> {
+pub fn send_msg_control(sock: &UnixStream, msg: &EventIn, fds: &[RawFd]) -> CodecResult<()> {
     send_control(sock, msg, fds)
 }
 
@@ -178,9 +178,9 @@ fn write_framed(sock: &UnixStream, opcode: u16, body: &[u8], fds: &[RawFd]) -> C
 
 /// Receive a control message (daemon → subprocess). Used by renderer
 /// subprocesses.
-pub fn recv_control(sock: &UnixStream) -> CodecResult<(Request, Vec<OwnedFd>)> {
+pub fn recv_control(sock: &UnixStream) -> CodecResult<(EventIn, Vec<OwnedFd>)> {
     let (opcode, body, fds) = read_framed(sock)?;
-    let req = Request::decode(opcode, &body)?;
+    let req = EventIn::decode(opcode, &body)?;
     let expected = req.expected_fds();
     if fds.len() != expected as usize {
         return Err(CodecError::FdCountMismatch {
@@ -261,7 +261,7 @@ fn read_framed(sock: &UnixStream) -> CodecResult<(u16, Vec<u8>, Vec<OwnedFd>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::generated::{Event, Request, PROTOCOL_VERSION};
+    use crate::ipc::generated::{Event, EventIn, PROTOCOL_VERSION};
     use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
     use std::ffi::CString;
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn roundtrip_control_no_fds() {
         let (a, b) = pair();
-        let sent = Request::SetFps { fps: 30 };
+        let sent = EventIn::SetFps { fps: 30 };
         send_control(&a, &sent, &[]).unwrap();
         let (got, fds) = recv_control(&b).unwrap();
         assert_eq!(sent, got);
@@ -286,7 +286,7 @@ mod tests {
         let (a, b) = pair();
         // SPAWN_VERSION 3: pure kv. fps lives as a kv key when the
         // manifest declares it; no typed scalar.
-        let sent = Request::ApplySettings {
+        let sent = EventIn::SettingChanged {
             settings: vec![
                 ("fps".into(), "60".into()),
                 ("loop_file".into(), "no".into()),
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(sent, got);
 
         // Empty kv list is a valid (no-op) wire message.
-        let sent2 = Request::ApplySettings {
+        let sent2 = EventIn::SettingChanged {
             settings: vec![("volume".into(), "0.5".into())],
         };
         send_control(&a, &sent2, &[]).unwrap();
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn roundtrip_init() {
         let (a, b) = pair();
-        let sent = Request::Init {
+        let sent = EventIn::Init {
             spawn_version: 3,
             extent_w: 1920,
             extent_h: 1080,
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn roundtrip_play_pause_shutdown() {
         let (a, b) = pair();
-        for msg in [Request::Play, Request::Pause, Request::Shutdown] {
+        for msg in [EventIn::Play, EventIn::Pause, EventIn::Shutdown] {
             send_control(&a, &msg, &[]).unwrap();
             let (got, _) = recv_control(&b).unwrap();
             assert_eq!(msg, got);
@@ -409,19 +409,19 @@ mod tests {
     fn fd_limit_enforced() {
         let (a, _b) = pair();
         let fds: Vec<RawFd> = (0..(MAX_FDS_PER_MSG + 1) as i32).collect();
-        let err = send_control(&a, &Request::Play, &fds).unwrap_err();
+        let err = send_control(&a, &EventIn::Play, &fds).unwrap_err();
         assert!(matches!(err, CodecError::TooManyFds(_)));
     }
 
     #[test]
     fn back_to_back_frames() {
         let (a, b) = pair();
-        send_control(&a, &Request::Play, &[]).unwrap();
-        send_control(&a, &Request::SetFps { fps: 60 }, &[]).unwrap();
+        send_control(&a, &EventIn::Play, &[]).unwrap();
+        send_control(&a, &EventIn::SetFps { fps: 60 }, &[]).unwrap();
         let (r1, _) = recv_control(&b).unwrap();
         let (r2, _) = recv_control(&b).unwrap();
-        assert_eq!(r1, Request::Play);
-        assert_eq!(r2, Request::SetFps { fps: 60 });
+        assert_eq!(r1, EventIn::Play);
+        assert_eq!(r2, EventIn::SetFps { fps: 60 });
     }
 
     #[test]

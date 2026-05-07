@@ -15,7 +15,7 @@ extern "C" {
 
 /* -----------------------------------------------------------------------
  * Path / memory classification — wire-mirrored to ipc-v3
- * `ww_req_negotiate_buffers_t.{path, mem_source}` and
+ * `ww_evt_in_negotiate_buffers_t.{path, mem_source}` and
  * `negotiate.rs::PathCategory` / `MemSource`.
  * ----------------------------------------------------------------------- */
 
@@ -190,7 +190,7 @@ int  ww_bridge_pool_advertise_caps(ww_pool_t *pool,
                                    uint32_t   height,
                                    uint32_t   mem_hints);
 
-/* Apply a directive received via `WW_REQ_NEGOTIATE_BUFFERS`. Internal
+/* Apply a directive received via `WW_EVT_IN_NEGOTIATE_BUFFERS`. Internal
  * sequence:
  *
  *   1) Validate directive (path/mem_source range, modifier in

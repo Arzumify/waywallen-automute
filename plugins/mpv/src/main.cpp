@@ -567,14 +567,14 @@ bool drain_pending_negotiate(HostState& host, GlCtx& gl) {
 void apply_control(HostState& s, MpvState& m, WakeState& wake,
                    ww_bridge_control_t& c) {
     switch (c.op) {
-    case WW_REQ_INIT:
+    case WW_EVT_IN_INIT:
         // Init is consumed at the top of main before the reader
         // thread starts. A late Init is either a buggy daemon
         // resending or a protocol violation; log and ignore.
         std::fprintf(stderr,
                      "waywallen-mpv-renderer: unexpected late Init; ignoring\n");
         break;
-    case WW_REQ_APPLY_SETTINGS: {
+    case WW_EVT_IN_SETTING_CHANGED: {
         // v5 hot-reload: peel the typed view, apply known mpv knobs
         // via mpv_set_property (mpv option names use dashes, not the
         // underscore form the manifest uses), warn on the rest. fps
@@ -582,8 +582,8 @@ void apply_control(HostState& s, MpvState& m, WakeState& wake,
         // limiting — the renderer's main loop is driven by mpv's own
         // clock so changing the fps cap takes effect on the next
         // decoded frame.
-        ww_bridge_apply_settings_t as {};
-        if (ww_bridge_apply_settings_from_control(&c, &as) != 0) break;
+        ww_bridge_setting_changed_t as {};
+        if (ww_bridge_setting_changed_from_control(&c, &as) != 0) break;
         for (uint32_t i = 0; i < as.settings.count; ++i) {
             const char* key = as.settings.data[i].key;
             const char* val = as.settings.data[i].value;
@@ -608,29 +608,31 @@ void apply_control(HostState& s, MpvState& m, WakeState& wake,
                              mpv_opt, val, rc);
             }
         }
-        ww_bridge_apply_settings_free(&as);
+        ww_bridge_setting_changed_free(&as);
         // Wake the main loop so a paused renderer picks up the
         // setting on the next iteration.
         wake_up(wake);
         break;
     }
-    case WW_REQ_PLAY: {
+    case WW_EVT_IN_PLAY: {
         int v = 0;
         mpv_set_property(m.mpv, "pause", MPV_FORMAT_FLAG, &v);
         break;
     }
-    case WW_REQ_PAUSE: {
+    case WW_EVT_IN_PAUSE: {
         int v = 1;
         mpv_set_property(m.mpv, "pause", MPV_FORMAT_FLAG, &v);
         break;
     }
-    case WW_REQ_MOUSE:
-    case WW_REQ_SET_FPS:
+    case WW_EVT_IN_SET_FPS:
+    case WW_EVT_IN_POINTER_MOTION:
+    case WW_EVT_IN_POINTER_BUTTON:
+    case WW_EVT_IN_POINTER_AXIS:
         break;
-    case WW_REQ_SHUTDOWN:
+    case WW_EVT_IN_SHUTDOWN:
         s.shutdown.store(true, std::memory_order_release);
         break;
-    case WW_REQ_NEGOTIATE_BUFFERS: {
+    case WW_EVT_IN_NEGOTIATE_BUFFERS: {
         const auto& nb = c.u.negotiate_buffers;
         ww_pool_directive_t d {};
         d.category   = nb.path;

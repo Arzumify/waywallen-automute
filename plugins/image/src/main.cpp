@@ -254,7 +254,7 @@ void apply_negotiate_request(HostState& host, wavsen::video::Producer& producer,
 
 void apply_control(HostState& host, ww_bridge_control_t& c) {
     switch (c.op) {
-    case WW_REQ_INIT:
+    case WW_EVT_IN_INIT:
         // Init is consumed by ww_bridge_recv_init at the top of main
         // before the reader thread is even spawned. Anything that
         // arrives here is either a buggy daemon resending it or a
@@ -262,19 +262,24 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
         std::fprintf(stderr,
                      "waywallen-image-renderer: unexpected late Init; ignoring\n");
         break;
-    case WW_REQ_PLAY:
-    case WW_REQ_PAUSE:
-    case WW_REQ_MOUSE:
-    case WW_REQ_SET_FPS:
+    case WW_EVT_IN_PLAY:
+    case WW_EVT_IN_PAUSE:
+    case WW_EVT_IN_SET_FPS:
+    case WW_EVT_IN_POINTER_MOTION:
+    case WW_EVT_IN_POINTER_BUTTON:
+    case WW_EVT_IN_POINTER_AXIS:
+        // image renderer doesn't subscribe to pointer events; daemon
+        // already gates these (manifest sans `events`), but stay
+        // permissive in case a misconfigured daemon forwards anyway.
         break;
-    case WW_REQ_APPLY_SETTINGS: {
+    case WW_EVT_IN_SETTING_CHANGED: {
         // The image renderer's manifest declares no settings, so an
         // ApplySettings should arrive empty. If the daemon sends a
         // non-empty kv list (e.g. the user added a tunable key in
         // `settings.toml` that no schema declares), warn-log and
         // discard so we don't surprise the user with silent drops.
-        ww_bridge_apply_settings_t as {};
-        if (ww_bridge_apply_settings_from_control(&c, &as) == 0) {
+        ww_bridge_setting_changed_t as {};
+        if (ww_bridge_setting_changed_from_control(&c, &as) == 0) {
             if (as.settings.count > 0) {
                 std::fprintf(stderr,
                              "waywallen-image-renderer: ApplySettings "
@@ -282,14 +287,14 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
                              "ignoring\n",
                              as.settings.count);
             }
-            ww_bridge_apply_settings_free(&as);
+            ww_bridge_setting_changed_free(&as);
         }
         break;
     }
-    case WW_REQ_SHUTDOWN:
+    case WW_EVT_IN_SHUTDOWN:
         signal_shutdown(host);
         break;
-    case WW_REQ_NEGOTIATE_BUFFERS: {
+    case WW_EVT_IN_NEGOTIATE_BUFFERS: {
         const auto& nb = c.u.negotiate_buffers;
         ww_pool_directive_t d {};
         d.category    = nb.path;

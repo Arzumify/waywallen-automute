@@ -388,7 +388,7 @@ static void free_kv_list(ww_kv_list_t *a) {
  * Per-message implementations
  * ====================================================================== */
 
-int ww_req_init_encode(const ww_req_init_t *m, ww_buf_t *out) {
+int ww_evt_in_init_encode(const ww_evt_in_init_t *m, ww_buf_t *out) {
     int rc;
     (void)m;
     if ((rc = w_u32(out, m->spawn_version))) return rc;
@@ -399,7 +399,7 @@ int ww_req_init_encode(const ww_req_init_t *m, ww_buf_t *out) {
     return WW_OK;
 }
 
-int ww_req_init_decode(const uint8_t *buf, size_t len, ww_req_init_t *out) {
+int ww_evt_in_init_decode(const uint8_t *buf, size_t len, ww_evt_in_init_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     int rc;
@@ -411,32 +411,32 @@ int ww_req_init_decode(const uint8_t *buf, size_t len, ww_req_init_t *out) {
     if (r.pos != r.len) {
         int rc2 = WW_ERR_TRAILING;
         (void)rc2;
-        ww_req_init_free(out);
+        ww_evt_in_init_free(out);
         return WW_ERR_TRAILING;
     }
     return WW_OK;
 fail:
-    ww_req_init_free(out);
+    ww_evt_in_init_free(out);
     return rc;
 }
 
-void ww_req_init_free(ww_req_init_t *m) {
+void ww_evt_in_init_free(ww_evt_in_init_t *m) {
     free_kv_list(&m->settings);
 }
 
-uint32_t ww_req_init_expected_fds(const ww_req_init_t *m) {
+uint32_t ww_evt_in_init_expected_fds(const ww_evt_in_init_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_apply_settings_encode(const ww_req_apply_settings_t *m, ww_buf_t *out) {
+int ww_evt_in_setting_changed_encode(const ww_evt_in_setting_changed_t *m, ww_buf_t *out) {
     int rc;
     (void)m;
     if ((rc = w_kv_list(out, &m->settings))) return rc;
     return WW_OK;
 }
 
-int ww_req_apply_settings_decode(const uint8_t *buf, size_t len, ww_req_apply_settings_t *out) {
+int ww_evt_in_setting_changed_decode(const uint8_t *buf, size_t len, ww_evt_in_setting_changed_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     int rc;
@@ -444,30 +444,30 @@ int ww_req_apply_settings_decode(const uint8_t *buf, size_t len, ww_req_apply_se
     if (r.pos != r.len) {
         int rc2 = WW_ERR_TRAILING;
         (void)rc2;
-        ww_req_apply_settings_free(out);
+        ww_evt_in_setting_changed_free(out);
         return WW_ERR_TRAILING;
     }
     return WW_OK;
 fail:
-    ww_req_apply_settings_free(out);
+    ww_evt_in_setting_changed_free(out);
     return rc;
 }
 
-void ww_req_apply_settings_free(ww_req_apply_settings_t *m) {
+void ww_evt_in_setting_changed_free(ww_evt_in_setting_changed_t *m) {
     free_kv_list(&m->settings);
 }
 
-uint32_t ww_req_apply_settings_expected_fds(const ww_req_apply_settings_t *m) {
+uint32_t ww_evt_in_setting_changed_expected_fds(const ww_evt_in_setting_changed_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_play_encode(const ww_req_play_t *m, ww_buf_t *out) {
+int ww_evt_in_play_encode(const ww_evt_in_play_t *m, ww_buf_t *out) {
     (void)m; (void)out;
     return WW_OK;
 }
 
-int ww_req_play_decode(const uint8_t *buf, size_t len, ww_req_play_t *out) {
+int ww_evt_in_play_decode(const uint8_t *buf, size_t len, ww_evt_in_play_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     (void)r;
@@ -478,21 +478,21 @@ int ww_req_play_decode(const uint8_t *buf, size_t len, ww_req_play_t *out) {
     return WW_OK;
 }
 
-void ww_req_play_free(ww_req_play_t *m) {
+void ww_evt_in_play_free(ww_evt_in_play_t *m) {
     (void)m;
 }
 
-uint32_t ww_req_play_expected_fds(const ww_req_play_t *m) {
+uint32_t ww_evt_in_play_expected_fds(const ww_evt_in_play_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_pause_encode(const ww_req_pause_t *m, ww_buf_t *out) {
+int ww_evt_in_pause_encode(const ww_evt_in_pause_t *m, ww_buf_t *out) {
     (void)m; (void)out;
     return WW_OK;
 }
 
-int ww_req_pause_decode(const uint8_t *buf, size_t len, ww_req_pause_t *out) {
+int ww_evt_in_pause_decode(const uint8_t *buf, size_t len, ww_evt_in_pause_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     (void)r;
@@ -503,58 +503,62 @@ int ww_req_pause_decode(const uint8_t *buf, size_t len, ww_req_pause_t *out) {
     return WW_OK;
 }
 
-void ww_req_pause_free(ww_req_pause_t *m) {
+void ww_evt_in_pause_free(ww_evt_in_pause_t *m) {
     (void)m;
 }
 
-uint32_t ww_req_pause_expected_fds(const ww_req_pause_t *m) {
+uint32_t ww_evt_in_pause_expected_fds(const ww_evt_in_pause_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_mouse_encode(const ww_req_mouse_t *m, ww_buf_t *out) {
+int ww_evt_in_pointer_motion_encode(const ww_evt_in_pointer_motion_t *m, ww_buf_t *out) {
     int rc;
     (void)m;
-    if ((rc = w_f64(out, m->x))) return rc;
-    if ((rc = w_f64(out, m->y))) return rc;
+    if ((rc = w_f32(out, m->x))) return rc;
+    if ((rc = w_f32(out, m->y))) return rc;
+    if ((rc = w_u64(out, m->timestamp_us))) return rc;
+    if ((rc = w_u32(out, m->modifiers))) return rc;
     return WW_OK;
 }
 
-int ww_req_mouse_decode(const uint8_t *buf, size_t len, ww_req_mouse_t *out) {
+int ww_evt_in_pointer_motion_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_motion_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     int rc;
-    if ((rc = rd_f64(&r, &out->x))) goto fail;
-    if ((rc = rd_f64(&r, &out->y))) goto fail;
+    if ((rc = rd_f32(&r, &out->x))) goto fail;
+    if ((rc = rd_f32(&r, &out->y))) goto fail;
+    if ((rc = rd_u64(&r, &out->timestamp_us))) goto fail;
+    if ((rc = rd_u32(&r, &out->modifiers))) goto fail;
     if (r.pos != r.len) {
         int rc2 = WW_ERR_TRAILING;
         (void)rc2;
-        ww_req_mouse_free(out);
+        ww_evt_in_pointer_motion_free(out);
         return WW_ERR_TRAILING;
     }
     return WW_OK;
 fail:
-    ww_req_mouse_free(out);
+    ww_evt_in_pointer_motion_free(out);
     return rc;
 }
 
-void ww_req_mouse_free(ww_req_mouse_t *m) {
+void ww_evt_in_pointer_motion_free(ww_evt_in_pointer_motion_t *m) {
     (void)m;
 }
 
-uint32_t ww_req_mouse_expected_fds(const ww_req_mouse_t *m) {
+uint32_t ww_evt_in_pointer_motion_expected_fds(const ww_evt_in_pointer_motion_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_set_fps_encode(const ww_req_set_fps_t *m, ww_buf_t *out) {
+int ww_evt_in_set_fps_encode(const ww_evt_in_set_fps_t *m, ww_buf_t *out) {
     int rc;
     (void)m;
     if ((rc = w_u32(out, m->fps))) return rc;
     return WW_OK;
 }
 
-int ww_req_set_fps_decode(const uint8_t *buf, size_t len, ww_req_set_fps_t *out) {
+int ww_evt_in_set_fps_decode(const uint8_t *buf, size_t len, ww_evt_in_set_fps_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     int rc;
@@ -562,30 +566,30 @@ int ww_req_set_fps_decode(const uint8_t *buf, size_t len, ww_req_set_fps_t *out)
     if (r.pos != r.len) {
         int rc2 = WW_ERR_TRAILING;
         (void)rc2;
-        ww_req_set_fps_free(out);
+        ww_evt_in_set_fps_free(out);
         return WW_ERR_TRAILING;
     }
     return WW_OK;
 fail:
-    ww_req_set_fps_free(out);
+    ww_evt_in_set_fps_free(out);
     return rc;
 }
 
-void ww_req_set_fps_free(ww_req_set_fps_t *m) {
+void ww_evt_in_set_fps_free(ww_evt_in_set_fps_t *m) {
     (void)m;
 }
 
-uint32_t ww_req_set_fps_expected_fds(const ww_req_set_fps_t *m) {
+uint32_t ww_evt_in_set_fps_expected_fds(const ww_evt_in_set_fps_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_shutdown_encode(const ww_req_shutdown_t *m, ww_buf_t *out) {
+int ww_evt_in_shutdown_encode(const ww_evt_in_shutdown_t *m, ww_buf_t *out) {
     (void)m; (void)out;
     return WW_OK;
 }
 
-int ww_req_shutdown_decode(const uint8_t *buf, size_t len, ww_req_shutdown_t *out) {
+int ww_evt_in_shutdown_decode(const uint8_t *buf, size_t len, ww_evt_in_shutdown_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     (void)r;
@@ -596,16 +600,16 @@ int ww_req_shutdown_decode(const uint8_t *buf, size_t len, ww_req_shutdown_t *ou
     return WW_OK;
 }
 
-void ww_req_shutdown_free(ww_req_shutdown_t *m) {
+void ww_evt_in_shutdown_free(ww_evt_in_shutdown_t *m) {
     (void)m;
 }
 
-uint32_t ww_req_shutdown_expected_fds(const ww_req_shutdown_t *m) {
+uint32_t ww_evt_in_shutdown_expected_fds(const ww_evt_in_shutdown_t *m) {
     (void)m;
     return 0;
 }
 
-int ww_req_negotiate_buffers_encode(const ww_req_negotiate_buffers_t *m, ww_buf_t *out) {
+int ww_evt_in_negotiate_buffers_encode(const ww_evt_in_negotiate_buffers_t *m, ww_buf_t *out) {
     int rc;
     (void)m;
     if ((rc = w_u32(out, m->fourcc))) return rc;
@@ -620,7 +624,7 @@ int ww_req_negotiate_buffers_encode(const ww_req_negotiate_buffers_t *m, ww_buf_
     return WW_OK;
 }
 
-int ww_req_negotiate_buffers_decode(const uint8_t *buf, size_t len, ww_req_negotiate_buffers_t *out) {
+int ww_evt_in_negotiate_buffers_decode(const uint8_t *buf, size_t len, ww_evt_in_negotiate_buffers_t *out) {
     memset(out, 0, sizeof(*out));
     ww_rd_t r = { buf, 0, len };
     int rc;
@@ -636,20 +640,108 @@ int ww_req_negotiate_buffers_decode(const uint8_t *buf, size_t len, ww_req_negot
     if (r.pos != r.len) {
         int rc2 = WW_ERR_TRAILING;
         (void)rc2;
-        ww_req_negotiate_buffers_free(out);
+        ww_evt_in_negotiate_buffers_free(out);
         return WW_ERR_TRAILING;
     }
     return WW_OK;
 fail:
-    ww_req_negotiate_buffers_free(out);
+    ww_evt_in_negotiate_buffers_free(out);
     return rc;
 }
 
-void ww_req_negotiate_buffers_free(ww_req_negotiate_buffers_t *m) {
+void ww_evt_in_negotiate_buffers_free(ww_evt_in_negotiate_buffers_t *m) {
     (void)m;
 }
 
-uint32_t ww_req_negotiate_buffers_expected_fds(const ww_req_negotiate_buffers_t *m) {
+uint32_t ww_evt_in_negotiate_buffers_expected_fds(const ww_evt_in_negotiate_buffers_t *m) {
+    (void)m;
+    return 0;
+}
+
+int ww_evt_in_pointer_button_encode(const ww_evt_in_pointer_button_t *m, ww_buf_t *out) {
+    int rc;
+    (void)m;
+    if ((rc = w_f32(out, m->x))) return rc;
+    if ((rc = w_f32(out, m->y))) return rc;
+    if ((rc = w_u32(out, m->button))) return rc;
+    if ((rc = w_u32(out, m->state))) return rc;
+    if ((rc = w_u64(out, m->timestamp_us))) return rc;
+    if ((rc = w_u32(out, m->modifiers))) return rc;
+    return WW_OK;
+}
+
+int ww_evt_in_pointer_button_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_button_t *out) {
+    memset(out, 0, sizeof(*out));
+    ww_rd_t r = { buf, 0, len };
+    int rc;
+    if ((rc = rd_f32(&r, &out->x))) goto fail;
+    if ((rc = rd_f32(&r, &out->y))) goto fail;
+    if ((rc = rd_u32(&r, &out->button))) goto fail;
+    if ((rc = rd_u32(&r, &out->state))) goto fail;
+    if ((rc = rd_u64(&r, &out->timestamp_us))) goto fail;
+    if ((rc = rd_u32(&r, &out->modifiers))) goto fail;
+    if (r.pos != r.len) {
+        int rc2 = WW_ERR_TRAILING;
+        (void)rc2;
+        ww_evt_in_pointer_button_free(out);
+        return WW_ERR_TRAILING;
+    }
+    return WW_OK;
+fail:
+    ww_evt_in_pointer_button_free(out);
+    return rc;
+}
+
+void ww_evt_in_pointer_button_free(ww_evt_in_pointer_button_t *m) {
+    (void)m;
+}
+
+uint32_t ww_evt_in_pointer_button_expected_fds(const ww_evt_in_pointer_button_t *m) {
+    (void)m;
+    return 0;
+}
+
+int ww_evt_in_pointer_axis_encode(const ww_evt_in_pointer_axis_t *m, ww_buf_t *out) {
+    int rc;
+    (void)m;
+    if ((rc = w_f32(out, m->x))) return rc;
+    if ((rc = w_f32(out, m->y))) return rc;
+    if ((rc = w_f32(out, m->delta_x))) return rc;
+    if ((rc = w_f32(out, m->delta_y))) return rc;
+    if ((rc = w_u32(out, m->source))) return rc;
+    if ((rc = w_u64(out, m->timestamp_us))) return rc;
+    if ((rc = w_u32(out, m->modifiers))) return rc;
+    return WW_OK;
+}
+
+int ww_evt_in_pointer_axis_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_axis_t *out) {
+    memset(out, 0, sizeof(*out));
+    ww_rd_t r = { buf, 0, len };
+    int rc;
+    if ((rc = rd_f32(&r, &out->x))) goto fail;
+    if ((rc = rd_f32(&r, &out->y))) goto fail;
+    if ((rc = rd_f32(&r, &out->delta_x))) goto fail;
+    if ((rc = rd_f32(&r, &out->delta_y))) goto fail;
+    if ((rc = rd_u32(&r, &out->source))) goto fail;
+    if ((rc = rd_u64(&r, &out->timestamp_us))) goto fail;
+    if ((rc = rd_u32(&r, &out->modifiers))) goto fail;
+    if (r.pos != r.len) {
+        int rc2 = WW_ERR_TRAILING;
+        (void)rc2;
+        ww_evt_in_pointer_axis_free(out);
+        return WW_ERR_TRAILING;
+    }
+    return WW_OK;
+fail:
+    ww_evt_in_pointer_axis_free(out);
+    return rc;
+}
+
+void ww_evt_in_pointer_axis_free(ww_evt_in_pointer_axis_t *m) {
+    (void)m;
+}
+
+uint32_t ww_evt_in_pointer_axis_expected_fds(const ww_evt_in_pointer_axis_t *m) {
     (void)m;
     return 0;
 }

@@ -303,6 +303,12 @@ async fn run_frame_loop(
         }
     });
 
+    // Most-recently-bound renderer, kept so inbound pointer events can
+    // be forwarded without a routing-table walk. `None` until the first
+    // Bind arrives; reset on Unbind so a stale handle doesn't outlive
+    // the link.
+    let mut bound_renderer: Option<Arc<RendererHandle>> = None;
+
     let result = loop {
         tokio::select! {
             _ = wait_shutdown(&mut shutdown_rx) => {
@@ -315,11 +321,13 @@ async fn run_frame_loop(
                     break Ok(());
                 }
                 Some(DisplayOutEvent::Bind { renderer }) => {
+                    bound_renderer = Some(Arc::clone(&renderer));
                     if let Err(e) = send_bind_from_renderer(&stream, &renderer).await {
                         break Err(e);
                     }
                 }
                 Some(DisplayOutEvent::Unbind { buffer_generation }) => {
+                    bound_renderer = None;
                     if let Err(e) = send_unbind(&stream, buffer_generation).await {
                         break Err(e);
                     }
@@ -388,20 +396,35 @@ async fn run_frame_loop(
                     log::info!("display {display_id}: bye");
                     break Ok(());
                 }
-                Some(Ok(Request::PointerMotion { x, y, .. })) => {
-                    log::debug!(
-                        "display {display_id}: pointer_motion x={x} y={y} (reserved, dropped)"
-                    );
+                Some(Ok(Request::PointerMotion { x, y, timestamp_us, modifiers })) => {
+                    if let Some(r) = bound_renderer.as_ref() {
+                        // RendererManager.send_pointer_motion gates on the
+                        // renderer's manifest events list, so unsubscribed
+                        // renderers see nothing.
+                        if let Err(e) = router.renderer_manager()
+                            .send_pointer_motion(&r.id, x, y, timestamp_us, modifiers).await
+                        {
+                            log::debug!("display {display_id}: pointer_motion forward failed: {e}");
+                        }
+                    }
                 }
-                Some(Ok(Request::PointerButton { x, y, button, state, .. })) => {
-                    log::debug!(
-                        "display {display_id}: pointer_button x={x} y={y} button={button} state={state} (reserved, dropped)"
-                    );
+                Some(Ok(Request::PointerButton { x, y, button, state, timestamp_us, modifiers })) => {
+                    if let Some(r) = bound_renderer.as_ref() {
+                        if let Err(e) = router.renderer_manager()
+                            .send_pointer_button(&r.id, x, y, button, state, timestamp_us, modifiers).await
+                        {
+                            log::debug!("display {display_id}: pointer_button forward failed: {e}");
+                        }
+                    }
                 }
-                Some(Ok(Request::PointerAxis { x, y, delta_x, delta_y, source, .. })) => {
-                    log::debug!(
-                        "display {display_id}: pointer_axis x={x} y={y} dx={delta_x} dy={delta_y} source={source} (reserved, dropped)"
-                    );
+                Some(Ok(Request::PointerAxis { x, y, delta_x, delta_y, source, timestamp_us, modifiers })) => {
+                    if let Some(r) = bound_renderer.as_ref() {
+                        if let Err(e) = router.renderer_manager()
+                            .send_pointer_axis(&r.id, x, y, delta_x, delta_y, source, timestamp_us, modifiers).await
+                        {
+                            log::debug!("display {display_id}: pointer_axis forward failed: {e}");
+                        }
+                    }
                 }
                 Some(Ok(other)) => {
                     log::warn!(

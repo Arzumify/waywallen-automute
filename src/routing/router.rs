@@ -264,6 +264,14 @@ pub struct Router {
 }
 
 impl Router {
+    /// Borrow the underlying RendererManager. Used by the display
+    /// endpoint to forward pointer events to the currently bound
+    /// renderer without going through routing-table walks (the bind
+    /// event already hands it the right renderer handle).
+    pub fn renderer_manager(&self) -> &Arc<RendererManager> {
+        &self.mgr
+    }
+
     pub fn new(mgr: Arc<RendererManager>) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(128);
         let router = Arc::new(Self {

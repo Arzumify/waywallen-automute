@@ -5,7 +5,7 @@
  * `ConfigureBuffers` flag set). Producers OR them into the
  * `mem_hints` / `sync_caps` / `color_caps` scalars on
  * `ww_evt_format_caps_t` and check them on incoming
- * `ww_req_negotiate_buffers_t`. The daemon takes the intersection
+ * `ww_evt_in_negotiate_buffers_t`. The daemon takes the intersection
  * with each consumer's caps to pick a scheme.
  *
  * Keep in sync with negotiate.rs — all bits are part of the wire

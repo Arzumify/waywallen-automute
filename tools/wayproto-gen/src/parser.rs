@@ -90,10 +90,23 @@ pub struct Message {
     pub fds: FdSpec,
 }
 
+/// Naming style for the daemon→peer (inbound-to-peer) direction.
+/// `<request>` keeps Wayland-style naming (`Request` enum, `WW_REQ_*`,
+/// `ww_req_*_t`). `<event_in>` switches to the inbound-event taxonomy
+/// (`EventIn` enum, `WW_EVT_IN_*`, `ww_evt_in_*_t`) used by the
+/// waywallen-ipc protocol where the daemon notifies renderer
+/// subprocesses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundKind {
+    Request,
+    EventIn,
+}
+
 #[derive(Debug, Clone)]
 pub struct Protocol {
     pub name: String,
     pub version: u32,
+    pub inbound_kind: InboundKind,
     pub requests: Vec<Message>,
     pub events: Vec<Message>,
 }
@@ -146,9 +159,17 @@ pub fn parse_protocol(src: &str) -> Result<Protocol, ParseError> {
 
     let mut requests = Vec::new();
     let mut events = Vec::new();
+    let mut inbound_kind: Option<InboundKind> = None;
     for child in &root.children {
         match child.name.as_str() {
-            "request" => requests.push(parse_message(child)?),
+            "request" => {
+                set_inbound_kind(&mut inbound_kind, InboundKind::Request)?;
+                requests.push(parse_message(child)?);
+            }
+            "event_in" => {
+                set_inbound_kind(&mut inbound_kind, InboundKind::EventIn)?;
+                requests.push(parse_message(child)?);
+            }
             "event" => events.push(parse_message(child)?),
             other => return err(0, format!("unknown top-level element <{other}>")),
         }
@@ -157,9 +178,23 @@ pub fn parse_protocol(src: &str) -> Result<Protocol, ParseError> {
     Ok(Protocol {
         name,
         version,
+        inbound_kind: inbound_kind.unwrap_or(InboundKind::Request),
         requests,
         events,
     })
+}
+
+fn set_inbound_kind(slot: &mut Option<InboundKind>, k: InboundKind) -> Result<(), ParseError> {
+    match *slot {
+        Some(prev) if prev != k => err(
+            0,
+            "protocol mixes <request> and <event_in>; pick exactly one",
+        ),
+        _ => {
+            *slot = Some(k);
+            Ok(())
+        }
+    }
 }
 
 fn parse_message(node: &Node) -> Result<Message, ParseError> {

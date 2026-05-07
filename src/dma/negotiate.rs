@@ -136,7 +136,7 @@ impl PeerCaps {
 }
 
 /// Path category — wire-mirrored to ipc-v3
-/// `ww_req_negotiate_buffers_t.path` and `ww_path_category` in
+/// `ww_evt_in_negotiate_buffers_t.path` and `ww_path_category` in
 /// `<waywallen-bridge/pool.h>`. The bridge dispatches its allocation
 /// path purely on this; modifier is the operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +163,7 @@ pub enum PathCategory {
 }
 
 /// Memory source — wire-mirrored to ipc-v3
-/// `ww_req_negotiate_buffers_t.mem_source` and `ww_mem_source` in
+/// `ww_evt_in_negotiate_buffers_t.mem_source` and `ww_mem_source` in
 /// `<waywallen-bridge/pool.h>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]

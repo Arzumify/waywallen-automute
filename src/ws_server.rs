@@ -686,9 +686,11 @@ async fn dispatch_inner(
         }
 
         Req::RendererMouse(r) => {
+            // Subscription-gated: skipped silently when the renderer's
+            // manifest doesn't declare events = ["pointer"].
             state
                 .renderer_manager
-                .send_control(&r.renderer_id, ControlMsg::Mouse { x: r.x, y: r.y })
+                .send_pointer_motion(&r.renderer_id, r.x as f32, r.y as f32, 0, 0)
                 .await?;
             Res::RendererMouse(pb::Empty {})
         }
@@ -1281,7 +1283,7 @@ async fn dispatch_inner(
                     }
                     if let Err(e) = state
                         .renderer_manager
-                        .send_apply_settings(&id, kv.clone(), None)
+                        .send_setting_changed(&id, kv.clone(), None)
                         .await
                     {
                         apply_failures.push(format!("{id} ({plugin_name}): {e}"));

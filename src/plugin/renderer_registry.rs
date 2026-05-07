@@ -49,6 +49,26 @@ pub struct RendererDef {
     /// validation".
     #[serde(default)]
     pub settings: HashMap<String, SettingDef>,
+    /// Opt-in inbound-event subscriptions. Recognized values: "pointer"
+    /// (covers pointer_motion / pointer_button / pointer_axis as a
+    /// family). Empty = renderer receives only the always-on inbound
+    /// events (init / setting_changed / play / pause / set_fps /
+    /// shutdown / negotiate_buffers); the daemon drops everything
+    /// else before encoding.
+    #[serde(default)]
+    pub events: Vec<String>,
+}
+
+/// Inbound-event family this renderer subscribed to via the manifest's
+/// `events` array. Recognized values are listed here so the daemon can
+/// reject unknown ones at parse time and keep the wire-side gating
+/// small and exhaustive.
+pub const EVENT_KIND_POINTER: &str = "pointer";
+
+/// Returns `true` when `name` matches one of the recognised
+/// inbound-event family strings.
+pub fn is_known_event_kind(name: &str) -> bool {
+    matches!(name, EVENT_KIND_POINTER)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -393,10 +413,26 @@ impl RendererRegistry {
                                 manifest.renderer.bin = manifest_dir.join(&manifest.renderer.bin);
                             }
                         }
+                        // Drop unrecognised event kinds with a warn — the
+                        // gating tables below only know about a small
+                        // closed set, so an unknown name in `events` is
+                        // effectively dead config.
+                        let renderer_name = manifest.renderer.name.clone();
+                        manifest.renderer.events.retain(|e| {
+                            if is_known_event_kind(e) {
+                                true
+                            } else {
+                                log::warn!(
+                                    "renderer {renderer_name}: dropping unknown event kind {e:?}"
+                                );
+                                false
+                            }
+                        });
                         log::info!(
-                            "loaded renderer manifest: {} (types: {:?})",
+                            "loaded renderer manifest: {} (types: {:?}, events: {:?})",
                             manifest.renderer.name,
-                            manifest.renderer.types
+                            manifest.renderer.types,
+                            manifest.renderer.events,
                         );
                         reg.register(manifest.renderer);
                     }
@@ -527,6 +563,31 @@ mod schema_tests {
             group: None,
             order: None,
         }
+    }
+
+    #[test]
+    fn manifest_parses_events_array() {
+        let src = r#"
+            [renderer]
+            name = "wescene-renderer"
+            bin = "/usr/bin/waywallen-wescene-renderer"
+            types = ["scene"]
+            events = ["pointer"]
+        "#;
+        let m: RendererManifest = toml::from_str(src).expect("parses");
+        assert_eq!(m.renderer.events, vec!["pointer".to_string()]);
+    }
+
+    #[test]
+    fn manifest_events_default_empty() {
+        let src = r#"
+            [renderer]
+            name = "waywallen-image"
+            bin = "/usr/bin/waywallen-image-renderer"
+            types = ["image"]
+        "#;
+        let m: RendererManifest = toml::from_str(src).expect("parses");
+        assert!(m.renderer.events.is_empty());
     }
 
     #[test]

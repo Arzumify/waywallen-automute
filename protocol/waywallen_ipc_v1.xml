@@ -11,6 +11,15 @@
     client  = renderer subprocess (e.g. waywallen-renderer, open-wallpaper-engine
               host). Produces DMA-BUF frames and emits events back.
 
+  Direction taxonomy:
+    <event_in> — daemon → subprocess (inbound to the renderer). All
+                 control-plane notifications: init, setting_changed,
+                 play, pause, set_fps, shutdown, pointer_*,
+                 negotiate_buffers.
+    <event>    — subprocess → daemon (outbound from the renderer):
+                 ready, bind_buffers, frame_ready, error,
+                 release_syncobj, format_caps, bind_failed, init_nack.
+
   Wire format: identical framing to waywallen-display-v1 (Wayland-style
   binary):
 
@@ -57,7 +66,7 @@
 
   Surface (consolidated; pre-1.0, internal testing — no compat shims):
 
-    Spawn handshake (v3). Resource path + extras (assets, workshop_id,
+    Spawn handshake (v4). Resource path + extras (assets, workshop_id,
     …) ride on the renderer's CLI argv as `--<key> <value>` pairs the
     daemon assembles from `source_plugin.extras(entry)`. Daemon then
     sends `init` (opcode 1) immediately after accept(), carrying:
@@ -68,7 +77,7 @@
     (opcode 8) on `spawn_version` mismatch; the daemon kills the
     child and surfaces the reason.
 
-    Hot reload. Daemon dispatches `apply_settings` (opcode 2) over a
+    Hot reload. Daemon dispatches `setting_changed` (opcode 2) over a
     live renderer's IPC whenever a non-identity setting in the
     `[renderer.settings]` table changes (mpv `loop_file`/`hwdec`,
     video `volume`, wescene `volume` / `fps`, …) instead of
@@ -76,7 +85,14 @@
     diff — fps is just one of those keys when the renderer's
     manifest declares it. Pairs with the daemon-side identity-aware
     `find_reusable`: a live renderer differing only on hot-reloadable
-    settings is reused via `apply_settings` rather than respawned.
+    settings is reused via `setting_changed` rather than respawned.
+
+    Optional pointer events. `pointer_motion` / `pointer_button` /
+    `pointer_axis` are forwarded from the consumer display only when
+    the renderer's manifest opts in via `[renderer] events =
+    ["pointer"]`. Renderers that don't subscribe never see them.
+    Field shapes mirror waywallen-display-v1's pointer events; the
+    daemon is a pure passthrough that strips its display id.
 
     Modifier negotiation. The renderer ships `format_caps` after
     `ready` and before any `bind_buffers`, advertising
@@ -108,16 +124,16 @@
     proprietary where every modifier is external_only), forcing the
     daemon to pick a COMPAT_LINEAR path regardless of consumer caps.
 
-  Version: 1 (file); spawn payload = SPAWN_VERSION 3
+  Version: 1 (file); spawn payload = SPAWN_VERSION 4
 -->
 <protocol name="waywallen_ipc" version="1">
 
   <!-- ==================================================================
-       REQUESTS  (daemon -> subprocess, control plane)
+       INBOUND EVENTS  (daemon -> subprocess, control plane)
        ================================================================== -->
 
   <!--
-    Spawn-time `init` (SPAWN_VERSION 3): typed payload sent by the
+    Spawn-time `init` (SPAWN_VERSION 4): typed payload sent by the
     daemon immediately after accept(). Carries the minimum the
     renderer needs to allocate its render target (extent triple) plus
     the resolved L1 `[renderer.settings]` kv list. Resource path and
@@ -128,7 +144,7 @@
     Fields:
       `spawn_version` — protocol version of the Init payload itself.
                         Renderer MUST send `init_nack` if it does not
-                        recognise the value. Current = 3.
+                        recognise the value. Current = 4.
       `extent_w/h`    — pixel extent. `0` on either axis means
                         "unspecified — renderer derives that axis
                         from its content's intrinsic size".
@@ -146,20 +162,20 @@
                         `render_node`, … — live here as kv keys
                         whenever the renderer's manifest declares
                         them. No typed scalar promotion: the same kv
-                        shape is used in `apply_settings` for live
+                        shape is used in `setting_changed` for live
                         diffs.
   -->
-  <request name="init" opcode="1">
+  <event_in name="init" opcode="1">
     <arg name="spawn_version" type="u32"/>
     <arg name="extent_w" type="u32"/>
     <arg name="extent_h" type="u32"/>
     <arg name="extent_mode" type="u32"/>
     <arg name="settings" type="kv_list"/>
-  </request>
+  </event_in>
 
   <!--
-    Hot-reload: push a delta of `[renderer.settings]` to a live
-    renderer without respawning. Only `identity = false` settings
+    Setting-changed event: push a delta of `[renderer.settings]` to a
+    live renderer without respawning. Only `identity = false` settings
     from the renderer's manifest are valid here (daemon-side
     `find_reusable` filters before sending). All scalar settings,
     including `fps` and `test_pattern`, ride as kv keys — same shape
@@ -173,28 +189,36 @@
       - video: `loop_file` / `volume` / `fps`.
       - wescene: `volume`, `fps`.
   -->
-  <request name="apply_settings" opcode="2">
+  <event_in name="setting_changed" opcode="2">
     <arg name="settings" type="kv_list"/>
-  </request>
+  </event_in>
 
-  <request name="play" opcode="3"/>
-  <request name="pause" opcode="4"/>
+  <event_in name="play" opcode="3"/>
+  <event_in name="pause" opcode="4"/>
 
-  <request name="mouse" opcode="5">
-    <arg name="x" type="f64"/>
-    <arg name="y" type="f64"/>
-  </request>
+  <!--
+    Pointer motion. Optional inbound event; only delivered when the
+    renderer's manifest declares `events = ["pointer"]`. Field shapes
+    mirror waywallen-display-v1 `pointer_motion` (opcode 8) — the
+    daemon is a pure passthrough.
+  -->
+  <event_in name="pointer_motion" opcode="5">
+    <arg name="x" type="f32"/>
+    <arg name="y" type="f32"/>
+    <arg name="timestamp_us" type="u64"/>
+    <arg name="modifiers" type="u32"/>
+  </event_in>
 
-  <request name="set_fps" opcode="6">
+  <event_in name="set_fps" opcode="6">
     <arg name="fps" type="u32"/>
-  </request>
+  </event_in>
 
   <!--
     Request clean shutdown. The subprocess is expected to finish the
     current frame, tear down its Vulkan state, and exit. The daemon
     will SIGKILL if the process does not exit quickly.
   -->
-  <request name="shutdown" opcode="7"/>
+  <event_in name="shutdown" opcode="7"/>
 
   <!--
     Opcode 8 was `configure_buffers` in v1; v2 deletes it in favor of
@@ -233,7 +257,7 @@
       `mem_source`    — v3, see `ww_mem_source` codes. Picks the
                         underlying memory backend for COMPAT_LINEAR.
   -->
-  <request name="negotiate_buffers" opcode="9">
+  <event_in name="negotiate_buffers" opcode="9">
     <arg name="fourcc" type="u32"/>
     <arg name="modifier" type="u64"/>
     <arg name="plane_count" type="u32"/>
@@ -243,7 +267,35 @@
     <arg name="count" type="u32"/>
     <arg name="path" type="u32"/>
     <arg name="mem_source" type="u32"/>
-  </request>
+  </event_in>
+
+  <!--
+    Pointer button. Optional; gated by manifest `events = ["pointer"]`.
+    Mirrors waywallen-display-v1 `pointer_button` (opcode 9).
+  -->
+  <event_in name="pointer_button" opcode="10">
+    <arg name="x" type="f32"/>
+    <arg name="y" type="f32"/>
+    <arg name="button" type="u32"/>
+    <arg name="state" type="u32"/>
+    <arg name="timestamp_us" type="u64"/>
+    <arg name="modifiers" type="u32"/>
+  </event_in>
+
+  <!--
+    Pointer axis (scroll). Optional; gated by manifest `events =
+    ["pointer"]`. Mirrors waywallen-display-v1 `pointer_axis`
+    (opcode 10).
+  -->
+  <event_in name="pointer_axis" opcode="11">
+    <arg name="x" type="f32"/>
+    <arg name="y" type="f32"/>
+    <arg name="delta_x" type="f32"/>
+    <arg name="delta_y" type="f32"/>
+    <arg name="source" type="u32"/>
+    <arg name="timestamp_us" type="u64"/>
+    <arg name="modifiers" type="u32"/>
+  </event_in>
 
 
   <!-- ==================================================================

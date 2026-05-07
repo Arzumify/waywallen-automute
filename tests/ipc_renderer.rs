@@ -436,9 +436,17 @@ mod lifecycle {
         mgr.send_control(&id, ControlMsg::Pause)
             .await
             .expect("Pause");
-        mgr.send_control(&id, ControlMsg::Mouse { x: 0.5, y: 0.25 })
-            .await
-            .expect("Mouse");
+        mgr.send_control(
+            &id,
+            ControlMsg::PointerMotion {
+                x: 0.5,
+                y: 0.25,
+                timestamp_us: 0,
+                modifiers: 0,
+            },
+        )
+        .await
+        .expect("PointerMotion");
         mgr.send_control(&id, ControlMsg::SetFps { fps: 24 })
             .await
             .expect("SetFps");

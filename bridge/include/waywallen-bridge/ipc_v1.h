@@ -88,16 +88,18 @@ typedef struct ww_buf {
 
 /* --- Opcodes --- */
 
-typedef enum ww_request_op {
-    WW_REQ_INIT = 1,
-    WW_REQ_APPLY_SETTINGS = 2,
-    WW_REQ_PLAY = 3,
-    WW_REQ_PAUSE = 4,
-    WW_REQ_MOUSE = 5,
-    WW_REQ_SET_FPS = 6,
-    WW_REQ_SHUTDOWN = 7,
-    WW_REQ_NEGOTIATE_BUFFERS = 9,
-} ww_request_op_t;
+typedef enum ww_event_in_op {
+    WW_EVT_IN_INIT = 1,
+    WW_EVT_IN_SETTING_CHANGED = 2,
+    WW_EVT_IN_PLAY = 3,
+    WW_EVT_IN_PAUSE = 4,
+    WW_EVT_IN_POINTER_MOTION = 5,
+    WW_EVT_IN_SET_FPS = 6,
+    WW_EVT_IN_SHUTDOWN = 7,
+    WW_EVT_IN_NEGOTIATE_BUFFERS = 9,
+    WW_EVT_IN_POINTER_BUTTON = 10,
+    WW_EVT_IN_POINTER_AXIS = 11,
+} ww_event_in_op_t;
 
 typedef enum ww_event_op {
     WW_EVT_READY = 1,
@@ -110,40 +112,42 @@ typedef enum ww_event_op {
     WW_EVT_INIT_NACK = 8,
 } ww_event_op_t;
 
-typedef struct ww_req_init_t {
+typedef struct ww_evt_in_init_t {
     uint32_t spawn_version;
     uint32_t extent_w;
     uint32_t extent_h;
     uint32_t extent_mode;
     ww_kv_list_t settings;
-} ww_req_init_t;
+} ww_evt_in_init_t;
 
-typedef struct ww_req_apply_settings_t {
+typedef struct ww_evt_in_setting_changed_t {
     ww_kv_list_t settings;
-} ww_req_apply_settings_t;
+} ww_evt_in_setting_changed_t;
 
-typedef struct ww_req_play_t {
+typedef struct ww_evt_in_play_t {
     int _empty; /* C forbids empty structs */
-} ww_req_play_t;
+} ww_evt_in_play_t;
 
-typedef struct ww_req_pause_t {
+typedef struct ww_evt_in_pause_t {
     int _empty; /* C forbids empty structs */
-} ww_req_pause_t;
+} ww_evt_in_pause_t;
 
-typedef struct ww_req_mouse_t {
-    double x;
-    double y;
-} ww_req_mouse_t;
+typedef struct ww_evt_in_pointer_motion_t {
+    float x;
+    float y;
+    uint64_t timestamp_us;
+    uint32_t modifiers;
+} ww_evt_in_pointer_motion_t;
 
-typedef struct ww_req_set_fps_t {
+typedef struct ww_evt_in_set_fps_t {
     uint32_t fps;
-} ww_req_set_fps_t;
+} ww_evt_in_set_fps_t;
 
-typedef struct ww_req_shutdown_t {
+typedef struct ww_evt_in_shutdown_t {
     int _empty; /* C forbids empty structs */
-} ww_req_shutdown_t;
+} ww_evt_in_shutdown_t;
 
-typedef struct ww_req_negotiate_buffers_t {
+typedef struct ww_evt_in_negotiate_buffers_t {
     uint32_t fourcc;
     uint64_t modifier;
     uint32_t plane_count;
@@ -153,7 +157,26 @@ typedef struct ww_req_negotiate_buffers_t {
     uint32_t count;
     uint32_t path;
     uint32_t mem_source;
-} ww_req_negotiate_buffers_t;
+} ww_evt_in_negotiate_buffers_t;
+
+typedef struct ww_evt_in_pointer_button_t {
+    float x;
+    float y;
+    uint32_t button;
+    uint32_t state;
+    uint64_t timestamp_us;
+    uint32_t modifiers;
+} ww_evt_in_pointer_button_t;
+
+typedef struct ww_evt_in_pointer_axis_t {
+    float x;
+    float y;
+    float delta_x;
+    float delta_y;
+    uint32_t source;
+    uint64_t timestamp_us;
+    uint32_t modifiers;
+} ww_evt_in_pointer_axis_t;
 
 typedef struct ww_evt_ready_t {
     uint32_t drm_render_major;
@@ -225,45 +248,55 @@ typedef struct ww_evt_init_nack_t {
  * expected_fds:  how many SCM_RIGHTS fds the wire frame must carry
  */
 
-int  ww_req_init_encode(const ww_req_init_t *m, ww_buf_t *out);
-int  ww_req_init_decode(const uint8_t *buf, size_t len, ww_req_init_t *out);
-void ww_req_init_free(ww_req_init_t *m);
-uint32_t ww_req_init_expected_fds(const ww_req_init_t *m);
+int  ww_evt_in_init_encode(const ww_evt_in_init_t *m, ww_buf_t *out);
+int  ww_evt_in_init_decode(const uint8_t *buf, size_t len, ww_evt_in_init_t *out);
+void ww_evt_in_init_free(ww_evt_in_init_t *m);
+uint32_t ww_evt_in_init_expected_fds(const ww_evt_in_init_t *m);
 
-int  ww_req_apply_settings_encode(const ww_req_apply_settings_t *m, ww_buf_t *out);
-int  ww_req_apply_settings_decode(const uint8_t *buf, size_t len, ww_req_apply_settings_t *out);
-void ww_req_apply_settings_free(ww_req_apply_settings_t *m);
-uint32_t ww_req_apply_settings_expected_fds(const ww_req_apply_settings_t *m);
+int  ww_evt_in_setting_changed_encode(const ww_evt_in_setting_changed_t *m, ww_buf_t *out);
+int  ww_evt_in_setting_changed_decode(const uint8_t *buf, size_t len, ww_evt_in_setting_changed_t *out);
+void ww_evt_in_setting_changed_free(ww_evt_in_setting_changed_t *m);
+uint32_t ww_evt_in_setting_changed_expected_fds(const ww_evt_in_setting_changed_t *m);
 
-int  ww_req_play_encode(const ww_req_play_t *m, ww_buf_t *out);
-int  ww_req_play_decode(const uint8_t *buf, size_t len, ww_req_play_t *out);
-void ww_req_play_free(ww_req_play_t *m);
-uint32_t ww_req_play_expected_fds(const ww_req_play_t *m);
+int  ww_evt_in_play_encode(const ww_evt_in_play_t *m, ww_buf_t *out);
+int  ww_evt_in_play_decode(const uint8_t *buf, size_t len, ww_evt_in_play_t *out);
+void ww_evt_in_play_free(ww_evt_in_play_t *m);
+uint32_t ww_evt_in_play_expected_fds(const ww_evt_in_play_t *m);
 
-int  ww_req_pause_encode(const ww_req_pause_t *m, ww_buf_t *out);
-int  ww_req_pause_decode(const uint8_t *buf, size_t len, ww_req_pause_t *out);
-void ww_req_pause_free(ww_req_pause_t *m);
-uint32_t ww_req_pause_expected_fds(const ww_req_pause_t *m);
+int  ww_evt_in_pause_encode(const ww_evt_in_pause_t *m, ww_buf_t *out);
+int  ww_evt_in_pause_decode(const uint8_t *buf, size_t len, ww_evt_in_pause_t *out);
+void ww_evt_in_pause_free(ww_evt_in_pause_t *m);
+uint32_t ww_evt_in_pause_expected_fds(const ww_evt_in_pause_t *m);
 
-int  ww_req_mouse_encode(const ww_req_mouse_t *m, ww_buf_t *out);
-int  ww_req_mouse_decode(const uint8_t *buf, size_t len, ww_req_mouse_t *out);
-void ww_req_mouse_free(ww_req_mouse_t *m);
-uint32_t ww_req_mouse_expected_fds(const ww_req_mouse_t *m);
+int  ww_evt_in_pointer_motion_encode(const ww_evt_in_pointer_motion_t *m, ww_buf_t *out);
+int  ww_evt_in_pointer_motion_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_motion_t *out);
+void ww_evt_in_pointer_motion_free(ww_evt_in_pointer_motion_t *m);
+uint32_t ww_evt_in_pointer_motion_expected_fds(const ww_evt_in_pointer_motion_t *m);
 
-int  ww_req_set_fps_encode(const ww_req_set_fps_t *m, ww_buf_t *out);
-int  ww_req_set_fps_decode(const uint8_t *buf, size_t len, ww_req_set_fps_t *out);
-void ww_req_set_fps_free(ww_req_set_fps_t *m);
-uint32_t ww_req_set_fps_expected_fds(const ww_req_set_fps_t *m);
+int  ww_evt_in_set_fps_encode(const ww_evt_in_set_fps_t *m, ww_buf_t *out);
+int  ww_evt_in_set_fps_decode(const uint8_t *buf, size_t len, ww_evt_in_set_fps_t *out);
+void ww_evt_in_set_fps_free(ww_evt_in_set_fps_t *m);
+uint32_t ww_evt_in_set_fps_expected_fds(const ww_evt_in_set_fps_t *m);
 
-int  ww_req_shutdown_encode(const ww_req_shutdown_t *m, ww_buf_t *out);
-int  ww_req_shutdown_decode(const uint8_t *buf, size_t len, ww_req_shutdown_t *out);
-void ww_req_shutdown_free(ww_req_shutdown_t *m);
-uint32_t ww_req_shutdown_expected_fds(const ww_req_shutdown_t *m);
+int  ww_evt_in_shutdown_encode(const ww_evt_in_shutdown_t *m, ww_buf_t *out);
+int  ww_evt_in_shutdown_decode(const uint8_t *buf, size_t len, ww_evt_in_shutdown_t *out);
+void ww_evt_in_shutdown_free(ww_evt_in_shutdown_t *m);
+uint32_t ww_evt_in_shutdown_expected_fds(const ww_evt_in_shutdown_t *m);
 
-int  ww_req_negotiate_buffers_encode(const ww_req_negotiate_buffers_t *m, ww_buf_t *out);
-int  ww_req_negotiate_buffers_decode(const uint8_t *buf, size_t len, ww_req_negotiate_buffers_t *out);
-void ww_req_negotiate_buffers_free(ww_req_negotiate_buffers_t *m);
-uint32_t ww_req_negotiate_buffers_expected_fds(const ww_req_negotiate_buffers_t *m);
+int  ww_evt_in_negotiate_buffers_encode(const ww_evt_in_negotiate_buffers_t *m, ww_buf_t *out);
+int  ww_evt_in_negotiate_buffers_decode(const uint8_t *buf, size_t len, ww_evt_in_negotiate_buffers_t *out);
+void ww_evt_in_negotiate_buffers_free(ww_evt_in_negotiate_buffers_t *m);
+uint32_t ww_evt_in_negotiate_buffers_expected_fds(const ww_evt_in_negotiate_buffers_t *m);
+
+int  ww_evt_in_pointer_button_encode(const ww_evt_in_pointer_button_t *m, ww_buf_t *out);
+int  ww_evt_in_pointer_button_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_button_t *out);
+void ww_evt_in_pointer_button_free(ww_evt_in_pointer_button_t *m);
+uint32_t ww_evt_in_pointer_button_expected_fds(const ww_evt_in_pointer_button_t *m);
+
+int  ww_evt_in_pointer_axis_encode(const ww_evt_in_pointer_axis_t *m, ww_buf_t *out);
+int  ww_evt_in_pointer_axis_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_axis_t *out);
+void ww_evt_in_pointer_axis_free(ww_evt_in_pointer_axis_t *m);
+uint32_t ww_evt_in_pointer_axis_expected_fds(const ww_evt_in_pointer_axis_t *m);
 
 int  ww_evt_ready_encode(const ww_evt_ready_t *m, ww_buf_t *out);
 int  ww_evt_ready_decode(const uint8_t *buf, size_t len, ww_evt_ready_t *out);
