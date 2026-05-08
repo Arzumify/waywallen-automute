@@ -226,6 +226,7 @@ MD.Page {
                             text: root.rendererLabel(modelData)
                             font.family: "monospace"
                             supportText: (modelData.status || "") + " · " + (modelData.fps || 0) + " fps"
+                                + (modelData.textureWidth ? " · " + modelData.textureWidth + "×" + modelData.textureHeight : "")
                             leader: MD.Icon {
                                 name: modelData.status === "paused" ? MD.Token.icon.pause : MD.Token.icon.play_arrow
                                 size: 24

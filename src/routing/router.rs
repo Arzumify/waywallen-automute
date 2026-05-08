@@ -191,6 +191,8 @@ pub struct RendererSnapshot {
     pub pid: u32,
     pub drm_render_major: u32,
     pub drm_render_minor: u32,
+    pub texture_width: u32,
+    pub texture_height: u32,
 }
 
 /// Read-only view of a registered display. Returned from
@@ -1003,6 +1005,7 @@ impl Router {
         } else {
             RendererStatus::Playing
         };
+        let (tw, th) = handle.texture_size();
         Some(RendererSnapshot {
             id: handle.id.clone(),
             wp_type: handle.wp_type.clone(),
@@ -1011,6 +1014,8 @@ impl Router {
             pid: handle.pid.unwrap_or(0),
             drm_render_major: handle.gpu.major,
             drm_render_minor: handle.gpu.minor,
+            texture_width: tw,
+            texture_height: th,
         })
     }
 
@@ -1029,6 +1034,7 @@ impl Router {
                 } else {
                     RendererStatus::Playing
                 };
+                let (tw, th) = handle.texture_size();
                 Some(RendererSnapshot {
                     id: handle.id.clone(),
                     wp_type: handle.wp_type.clone(),
@@ -1037,6 +1043,8 @@ impl Router {
                     pid: handle.pid.unwrap_or(0),
                     drm_render_major: handle.gpu.major,
                     drm_render_minor: handle.gpu.minor,
+                    texture_width: tw,
+                    texture_height: th,
                 })
             })
             .collect()
@@ -1297,6 +1305,12 @@ impl Router {
         // here will compute a fresh diff if the topology meanwhile
         // shifted again.
         self.reconcile_buffer_flags().await;
+        // BindBuffers is also when the renderer's actual texture dims
+        // become known; push a fresh snapshot so the UI flips from the
+        // spawn-time hint to the real resolution.
+        if let Some(snap) = self.snapshot_renderer(renderer_id).await {
+            self.emit(RouterEvent::RendererUpsert(snap));
+        }
     }
 
     async fn on_renderer_frame(

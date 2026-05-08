@@ -26,7 +26,9 @@ Renderer::Renderer(const proto::RendererInstance& info, QObject* parent)
       m_fps(info.fps()),
       m_status(info.status()),
       m_name(info.name()),
-      m_pid(info.pid()) {}
+      m_pid(info.pid()),
+      m_texture_width(info.textureWidth()),
+      m_texture_height(info.textureHeight()) {}
 
 void Renderer::updateFrom(const proto::RendererInstance& info) {
     rstd_assert(info.rendererId() == m_id, "Renderer::updateFrom id mismatch");
@@ -46,6 +48,11 @@ void Renderer::updateFrom(const proto::RendererInstance& info) {
     if (m_pid != info.pid()) {
         m_pid = info.pid();
         Q_EMIT pidChanged();
+    }
+    if (m_texture_width != info.textureWidth() || m_texture_height != info.textureHeight()) {
+        m_texture_width  = info.textureWidth();
+        m_texture_height = info.textureHeight();
+        Q_EMIT textureSizeChanged();
     }
 }
 

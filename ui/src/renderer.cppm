@@ -32,6 +32,8 @@ class Renderer : public QObject {
     Q_PROPERTY(QString status READ status NOTIFY statusChanged FINAL)
     Q_PROPERTY(QString name READ name NOTIFY nameChanged FINAL)
     Q_PROPERTY(quint32 pid READ pid NOTIFY pidChanged FINAL)
+    Q_PROPERTY(quint32 textureWidth READ textureWidth NOTIFY textureSizeChanged FINAL)
+    Q_PROPERTY(quint32 textureHeight READ textureHeight NOTIFY textureSizeChanged FINAL)
 
 public:
     explicit Renderer(const proto::RendererInstance& info, QObject* parent = nullptr);
@@ -41,6 +43,8 @@ public:
     auto status() const -> const QString& { return m_status; }
     auto name() const -> const QString& { return m_name; }
     auto pid() const -> quint32 { return m_pid; }
+    auto textureWidth() const -> quint32 { return m_texture_width; }
+    auto textureHeight() const -> quint32 { return m_texture_height; }
 
     /// Diff-update from a freshly-received `RendererInstance`. Only emits
     /// the signals for properties that actually changed.
@@ -50,6 +54,7 @@ public:
     Q_SIGNAL void statusChanged();
     Q_SIGNAL void nameChanged();
     Q_SIGNAL void pidChanged();
+    Q_SIGNAL void textureSizeChanged();
 
 private:
     QString m_id;
@@ -57,6 +62,8 @@ private:
     QString m_status;
     QString m_name;
     quint32 m_pid;
+    quint32 m_texture_width;
+    quint32 m_texture_height;
 };
 
 /// Singleton model for all currently-registered renderers. Fed by:

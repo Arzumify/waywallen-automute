@@ -57,11 +57,13 @@ void RendererListQuery::reload() {
             QVariantList instances;
             for (const auto& inst : list_rsp.instances()) {
                 QVariantMap m;
-                m[u"id"_s]     = inst.rendererId();
-                m[u"fps"_s]    = inst.fps();
-                m[u"status"_s] = inst.status();
-                m[u"name"_s]   = inst.name();
-                m[u"pid"_s]    = inst.pid();
+                m[u"id"_s]             = inst.rendererId();
+                m[u"fps"_s]            = inst.fps();
+                m[u"status"_s]         = inst.status();
+                m[u"name"_s]           = inst.name();
+                m[u"pid"_s]            = inst.pid();
+                m[u"texture_width"_s]  = inst.textureWidth();
+                m[u"texture_height"_s] = inst.textureHeight();
                 instances.append(m);
             }
             self->m_instances = std::move(instances);

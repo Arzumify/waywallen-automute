@@ -202,6 +202,10 @@ message RendererInstance {
   // show a human description.
   uint32 drm_render_major = 6;
   uint32 drm_render_minor = 7;
+  // Most-recent BindBuffers dims; falls back to the spawn-time
+  // `Init.extent_w/h` hint pre-bind. 0 ⇒ unknown.
+  uint32 texture_width  = 8;
+  uint32 texture_height = 9;
 }
 
 message RendererPlayRequest  { string renderer_id = 1; }

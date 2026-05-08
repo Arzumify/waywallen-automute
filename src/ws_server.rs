@@ -410,6 +410,8 @@ fn renderer_snapshot_to_pb(s: RendererSnapshot, settings: &SettingsStore) -> pb:
         pid: s.pid,
         drm_render_major: s.drm_render_major,
         drm_render_minor: s.drm_render_minor,
+        texture_width: s.texture_width,
+        texture_height: s.texture_height,
     }
 }
 
@@ -635,10 +637,13 @@ async fn dispatch_inner(
             let ids = state.renderer_manager.list().await;
             let mut instances = Vec::with_capacity(ids.len());
             for id in &ids {
-                let (name, pid, drm_render_major, drm_render_minor) =
+                let (name, pid, drm_render_major, drm_render_minor, texture_width, texture_height) =
                     match state.renderer_manager.get(id).await {
-                        Some(h) => (h.name.clone(), h.pid.unwrap_or(0), h.gpu.major, h.gpu.minor),
-                        None => (String::new(), 0, 0, 0),
+                        Some(h) => {
+                            let (tw, th) = h.texture_size();
+                            (h.name.clone(), h.pid.unwrap_or(0), h.gpu.major, h.gpu.minor, tw, th)
+                        }
+                        None => (String::new(), 0, 0, 0, 0, 0),
                     };
                 // fps lives in the plugin section of the settings store
                 // now (`Settings::reconcile` already enforces the
@@ -661,6 +666,8 @@ async fn dispatch_inner(
                     pid,
                     drm_render_major,
                     drm_render_minor,
+                    texture_width,
+                    texture_height,
                 });
             }
             Res::RendererList(pb::RendererListResponse {
