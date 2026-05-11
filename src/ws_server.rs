@@ -22,9 +22,8 @@ use crate::queue;
 use crate::renderer_manager;
 use crate::routing::{DisplaySnapshot, LibrarySnapshot, RendererSnapshot, RouterEvent};
 use crate::settings::{
-    FilterLogicState, SettingsStore, WallpaperAspectFilterState, WallpaperFilterRuleState,
-    WallpaperFilterState, WallpaperIntFilterState, WallpaperSortRuleState,
-    WallpaperStringFilterState,
+    FilterLogicState, SettingsStore, WallpaperFilterRuleState, WallpaperFilterState,
+    WallpaperIntFilterState, WallpaperSortRuleState, WallpaperStringFilterState,
 };
 use crate::tasks;
 use crate::AppState;

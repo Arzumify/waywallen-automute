@@ -11,90 +11,99 @@ MD.ItemDelegate {
     required property int index
     property WC.wallpaperStringFilter emptyStringFilter
     property WC.wallpaperIntFilter emptyIntFilter
-    property WC.wallpaperAspectFilter emptyAspectFilter
 
     font.capitalization: Font.MixedCase
 
     readonly property var typeOptions: [
-        { name: qsTr("Name"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_NAME, kind: "string" },
-        { name: qsTr("Wallpaper type"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WP_TYPE, kind: "string" },
-        { name: qsTr("Library"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_LIBRARY, kind: "string" },
-        { name: qsTr("Format"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_FORMAT, kind: "string" },
-        { name: qsTr("Width"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WIDTH, kind: "int" },
-        { name: qsTr("Height"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_HEIGHT, kind: "int" },
-        { name: qsTr("Size"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_SIZE, kind: "int" },
-        { name: qsTr("Aspect"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_ASPECT, kind: "aspect" }
+        { name: qsTr("Name"),           value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_NAME,    kind: "string"  },
+        { name: qsTr("Wallpaper type"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WP_TYPE, kind: "wp_type" },
+        { name: qsTr("Library"),        value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_LIBRARY, kind: "string"  },
+        { name: qsTr("Format"),         value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_FORMAT,  kind: "string"  },
+        { name: qsTr("Width"),          value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WIDTH,   kind: "int"     },
+        { name: qsTr("Height"),         value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_HEIGHT,  kind: "int"     },
+        { name: qsTr("Size"),           value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_SIZE,    kind: "int"     }
     ]
 
-    function optionForType(type) {
-        return typeOptions.find(e => e.value === type);
+    readonly property var currentOption: typeOptions.find(e => e.value === root.model.type) || null
+
+    readonly property var currentSpec: {
+        if (!currentOption)
+            return emptySpec;
+        if (currentOption.kind === "string")
+            return stringSpec;
+        if (currentOption.kind === "wp_type")
+            return wpTypeSpec;
+        if (currentOption.kind === "int")
+            return intSpec;
+        return emptySpec;
     }
 
     function applyType(option) {
         root.model.type = option.value;
         switch (option.kind) {
         case "string":
+        case "wp_type":
             root.model.stringFilter = emptyStringFilter;
             break;
         case "int":
             root.model.intFilter = emptyIntFilter;
             break;
-        case "aspect":
-            root.model.aspectFilter = emptyAspectFilter;
-            break;
         }
     }
 
-    function openMenu() {
-        typeMenu.open();
+    W.StringFilter {
+        id: stringSpec
+        filter: root.currentOption && root.currentOption.kind === "string" ? root.model : null
     }
-
-    Component.onCompleted: {
-        emptyAspectFilter.value = WC.WallpaperAspect.WALLPAPER_ASPECT_LANDSCAPE;
+    W.WpTypeFilter {
+        id: wpTypeSpec
+        filter: root.currentOption && root.currentOption.kind === "wp_type" ? root.model : null
     }
+    W.IntFilter {
+        id: intSpec
+        filter: root.currentOption && root.currentOption.kind === "int" ? root.model : null
+    }
+    W.EmptyFilter { id: emptySpec }
 
     contentItem: RowLayout {
-        Row {
+        Flow {
             Layout.fillWidth: true
-            spacing: 0
+            spacing: 12
+
+            MD.InputChip {
+                id: nameChip
+                text: root.currentOption ? root.currentOption.name : qsTr("Filter")
+                onClicked: typeMenu.open()
+            }
+
+            MD.InputChip {
+                id: conditionChip
+                text: {
+                    const spec = root.currentSpec;
+                    const item = (spec.conditionModel || []).find(e => e.value === spec.condition);
+                    return item ? item.name : "";
+                }
+                onClicked: conditionMenu.open()
+
+                MD.Menu {
+                    id: conditionMenu
+                    parent: conditionChip
+                    y: parent.height
+                    model: root.currentSpec.conditionModel || []
+                    contentDelegate: MD.MenuItem {
+                        required property var modelData
+                        text: modelData.name
+                        onClicked: {
+                            root.currentSpec.condition = modelData.value;
+                            conditionMenu.close();
+                        }
+                    }
+                }
+            }
 
             Loader {
-                id: filterLoader
-                width: parent.width
-
-                sourceComponent: {
-                    switch (root.model.type) {
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_NAME:
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WP_TYPE:
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_LIBRARY:
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_FORMAT:
-                        return stringFilterComponent;
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WIDTH:
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_HEIGHT:
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_SIZE:
-                        return intFilterComponent;
-                    case WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_ASPECT:
-                        return aspectFilterComponent;
-                    default:
-                        return emptyFilterComponent;
-                    }
-                }
-
-                onLoaded: {
-                    if (!item)
-                        return;
-                    const option = root.optionForType(root.model.type);
-                    if (option)
-                        item.name = option.name;
-                }
-
-                Connections {
-                    target: filterLoader.item
-                    ignoreUnknownSignals: true
-                    function onClicked() {
-                        root.openMenu();
-                    }
-                }
+                id: valueLoader
+                sourceComponent: root.currentSpec.valueDelegate
             }
         }
 
@@ -134,34 +143,6 @@ MD.ItemDelegate {
                 root.applyType(modelData);
                 typeMenu.close();
             }
-        }
-    }
-
-    Component {
-        id: stringFilterComponent
-        W.StringFilter {
-            filter: root.model
-        }
-    }
-
-    Component {
-        id: intFilterComponent
-        W.IntFilter {
-            filter: root.model
-        }
-    }
-
-    Component {
-        id: aspectFilterComponent
-        W.AspectFilter {
-            filter: root.model
-        }
-    }
-
-    Component {
-        id: emptyFilterComponent
-        W.EmptyFilter {
-            name: qsTr("Filter")
         }
     }
 }

@@ -234,7 +234,6 @@ pub struct WallpaperFilterRuleState {
     pub group: i32,
     pub string_filter: Option<WallpaperStringFilterState>,
     pub int_filter: Option<WallpaperIntFilterState>,
-    pub aspect_filter: Option<WallpaperAspectFilterState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -248,13 +247,6 @@ pub struct WallpaperStringFilterState {
 #[serde(default)]
 pub struct WallpaperIntFilterState {
     pub value: i64,
-    pub condition: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct WallpaperAspectFilterState {
-    pub value: i32,
     pub condition: i32,
 }
 
@@ -280,21 +272,12 @@ impl WallpaperFilterState {
                             condition: f.condition,
                         },
                     ))
-                } else if let Some(f) = rule.int_filter {
-                    Some(pb::wallpaper_filter_rule::Payload::IntFilter(
-                        pb::WallpaperIntFilter {
+                } else {
+                    rule.int_filter.map(|f| {
+                        pb::wallpaper_filter_rule::Payload::IntFilter(pb::WallpaperIntFilter {
                             value: f.value,
                             condition: f.condition,
-                        },
-                    ))
-                } else {
-                    rule.aspect_filter.map(|f| {
-                        pb::wallpaper_filter_rule::Payload::AspectFilter(
-                            pb::WallpaperAspectFilter {
-                                value: f.value,
-                                condition: f.condition,
-                            },
-                        )
+                        })
                     })
                 };
                 pb::WallpaperFilterRule {
@@ -339,15 +322,6 @@ impl WallpaperFilterState {
                     int_filter: rule.payload.as_ref().and_then(|p| match p {
                         pb::wallpaper_filter_rule::Payload::IntFilter(f) => {
                             Some(WallpaperIntFilterState {
-                                value: f.value,
-                                condition: f.condition,
-                            })
-                        }
-                        _ => None,
-                    }),
-                    aspect_filter: rule.payload.as_ref().and_then(|p| match p {
-                        pb::wallpaper_filter_rule::Payload::AspectFilter(f) => {
-                            Some(WallpaperAspectFilterState {
                                 value: f.value,
                                 condition: f.condition,
                             })

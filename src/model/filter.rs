@@ -143,13 +143,6 @@ pub fn wallpaper_filter_to_condition(filter: &pb::WallpaperFilterRule) -> Option
             ),
             _ => None,
         },
-        pb::WallpaperFilterType::Aspect => match filter.payload.as_ref() {
-            Some(Payload::AspectFilter(f)) => aspect_condition_to_condition(
-                pb::WallpaperAspect::try_from(f.value).unwrap_or(pb::WallpaperAspect::Unspecified),
-                pb::TypeCondition::try_from(f.condition).unwrap_or(pb::TypeCondition::Unspecified),
-            ),
-            _ => None,
-        },
         pb::WallpaperFilterType::Tag => match filter.payload.as_ref() {
             Some(Payload::StringFilter(f)) => tag_condition_to_condition(
                 &f.value,
@@ -279,60 +272,6 @@ where
     Some(Condition::all().add(expr))
 }
 
-fn aspect_condition_to_condition(
-    aspect: pb::WallpaperAspect,
-    cond: pb::TypeCondition,
-) -> Option<Condition> {
-    let width = || Expr::col((item::Entity, item::Column::Width));
-    let height = || Expr::col((item::Entity, item::Column::Height));
-
-    match cond {
-        pb::TypeCondition::Is => match aspect {
-            pb::WallpaperAspect::Landscape => Some(
-                Condition::all()
-                    .add(width().is_not_null())
-                    .add(height().is_not_null())
-                    .add(width().gt(height())),
-            ),
-            pb::WallpaperAspect::Portrait => Some(
-                Condition::all()
-                    .add(width().is_not_null())
-                    .add(height().is_not_null())
-                    .add(width().lt(height())),
-            ),
-            pb::WallpaperAspect::Square => Some(
-                Condition::all()
-                    .add(width().is_not_null())
-                    .add(height().is_not_null())
-                    .add(width().eq(height())),
-            ),
-            pb::WallpaperAspect::Unspecified => None,
-        },
-        pb::TypeCondition::IsNot => match aspect {
-            pb::WallpaperAspect::Landscape => Some(
-                Condition::any()
-                    .add(width().is_null())
-                    .add(height().is_null())
-                    .add(width().lte(height())),
-            ),
-            pb::WallpaperAspect::Portrait => Some(
-                Condition::any()
-                    .add(width().is_null())
-                    .add(height().is_null())
-                    .add(width().gte(height())),
-            ),
-            pb::WallpaperAspect::Square => Some(
-                Condition::any()
-                    .add(width().is_null())
-                    .add(height().is_null())
-                    .add(width().ne(height())),
-            ),
-            pb::WallpaperAspect::Unspecified => None,
-        },
-        pb::TypeCondition::Unspecified => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use sea_orm::{EntityTrait, QueryFilter};
@@ -447,15 +386,15 @@ mod tests {
             },
         ));
 
-        let mut aspect = pb::WallpaperFilterRule {
-            r#type: pb::WallpaperFilterType::Aspect as i32,
+        let mut wide = pb::WallpaperFilterRule {
+            r#type: pb::WallpaperFilterType::Width as i32,
             group: 1,
             payload: None,
         };
-        aspect.payload = Some(pb::wallpaper_filter_rule::Payload::AspectFilter(
-            pb::WallpaperAspectFilter {
-                value: pb::WallpaperAspect::Landscape as i32,
-                condition: pb::TypeCondition::Is as i32,
+        wide.payload = Some(pb::wallpaper_filter_rule::Payload::IntFilter(
+            pb::WallpaperIntFilter {
+                value: 1500,
+                condition: pb::IntCondition::GreaterEqual as i32,
             },
         ));
 
@@ -465,7 +404,7 @@ mod tests {
             group_b: 1,
         };
 
-        let condition = wallpaper_filters_to_condition(&[ty, aspect], &[logic]).unwrap();
+        let condition = wallpaper_filters_to_condition(&[ty, wide], &[logic]).unwrap();
         let rows = item::Entity::find()
             .find_also_related(library::Entity)
             .filter(condition)

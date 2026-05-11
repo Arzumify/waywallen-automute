@@ -2,13 +2,6 @@ syntax = "proto3";
 
 package waywallen.control.v1;
 
-enum WallpaperAspect {
-  WALLPAPER_ASPECT_UNSPECIFIED = 0;
-  WALLPAPER_ASPECT_LANDSCAPE = 1;
-  WALLPAPER_ASPECT_PORTRAIT = 2;
-  WALLPAPER_ASPECT_SQUARE = 3;
-}
-
 enum WallpaperFilterType {
   WALLPAPER_FILTER_TYPE_UNSPECIFIED = 0;
   WALLPAPER_FILTER_TYPE_NAME = 1;
@@ -18,7 +11,7 @@ enum WallpaperFilterType {
   WALLPAPER_FILTER_TYPE_WIDTH = 5;
   WALLPAPER_FILTER_TYPE_HEIGHT = 6;
   WALLPAPER_FILTER_TYPE_SIZE = 7;
-  WALLPAPER_FILTER_TYPE_ASPECT = 8;
+  reserved 8;
   // Tag predicates use the StringFilter payload; `value` is one tag
   // name, `condition` is IS / IS_NOT (CONTAINS variants are nonsensical
   // for tag membership and treated as IS / IS_NOT respectively).
@@ -43,12 +36,6 @@ enum IntCondition {
   INT_CONDITION_GREATER_EQUAL = 6;
 }
 
-enum TypeCondition {
-  TYPE_CONDITION_UNSPECIFIED = 0;
-  TYPE_CONDITION_IS = 1;
-  TYPE_CONDITION_IS_NOT = 2;
-}
-
 enum LogicOp {
   LOGIC_OP_UNSPECIFIED = 0;
   LOGIC_OP_AND = 1;
@@ -71,19 +58,14 @@ message WallpaperIntFilter {
   IntCondition condition = 2;
 }
 
-message WallpaperAspectFilter {
-  WallpaperAspect value = 1;
-  TypeCondition condition = 2;
-}
-
 message WallpaperFilterRule {
   WallpaperFilterType type = 1;
   int32 group = 2;
   oneof payload {
     WallpaperStringFilter string_filter = 101;
     WallpaperIntFilter int_filter = 102;
-    WallpaperAspectFilter aspect_filter = 103;
   }
+  reserved 103;
 }
 
 enum WallpaperSortKey {

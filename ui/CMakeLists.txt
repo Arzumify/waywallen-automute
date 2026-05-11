@@ -127,10 +127,9 @@ set(QML_FILES
   qml/component/PagePopup.qml
   qml/component/GpuTag.qml
   qml/component/ThumbnailImage.qml
-  qml/component/filter/BaseFilter.qml
   qml/component/filter/StringFilter.qml
   qml/component/filter/IntFilter.qml
-  qml/component/filter/AspectFilter.qml
+  qml/component/filter/WpTypeFilter.qml
   qml/component/filter/EmptyFilter.qml
   qml/component/filter/WallpaperFilter.qml
   qml/component/settings/SettingField.qml
