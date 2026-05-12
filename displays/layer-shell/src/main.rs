@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::net::Shutdown;
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -23,6 +24,7 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+    zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
     zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
 };
 use wayland_protocols::wp::viewporter::client::{
@@ -192,6 +194,12 @@ struct OutputBinding {
     /// `RegisterDisplay` or `UpdateDisplay`. Skips no-op resends when
     /// `Configure` repeats the same dims.
     last_pushed_size: Mutex<Option<(u32, u32)>>,
+    /// Compositor's main DRM render-node, sampled from
+    /// `App.compositor_drm_*` at binding creation. Reported in
+    /// `RegisterDisplay` so the daemon's DMA-BUF picker can match
+    /// renderer GPU == consumer GPU and take the optimized path.
+    drm_render_major: u32,
+    drm_render_minor: u32,
 }
 
 /// One logical output — wl_output plus the layer_surface/UDS worker
@@ -231,6 +239,27 @@ struct App {
     /// be useful (the buffer is sized in physical pixels and the
     /// viewport maps it back onto the logical surface extent).
     fractional_scale_mgr: Option<WpFractionalScaleManagerV1>,
+    /// Default `zwp_linux_dmabuf_feedback_v1` (dmabuf v4+). Kept
+    /// alive so its `main_device` events keep landing if the
+    /// compositor reassigns mid-session. Decoded GPU is stored below.
+    dmabuf_feedback: Option<ZwpLinuxDmabufFeedbackV1>,
+    /// Compositor's main DRM render-node, decoded from the dmabuf
+    /// feedback `main_device` event. `(0, 0)` = unknown — either the
+    /// compositor advertises dmabuf < v4 or the event hasn't fired
+    /// yet. Sampled into each `OutputBinding` at construction and
+    /// reported in `RegisterDisplay`, so the daemon's DMA-BUF picker
+    /// can detect that producer + consumer share a GPU and take the
+    /// `OptimizedSameDevice` path (native tiling + DEVICE_LOCAL)
+    /// instead of `CompatLinear` (LINEAR + cross-device pessimism).
+    compositor_drm_major: u32,
+    compositor_drm_minor: u32,
+    /// Format table delivered by `wp_linux_dmabuf_feedback_v1`. The
+    /// compositor writes a memfd containing 16-byte records:
+    /// `{u32 fourcc; u8 _pad[4]; u64 modifier}`. We read it once on
+    /// `format_table` and index into it from each `tranche_formats`
+    /// event. Empty when no feedback has been delivered (dmabuf < v4
+    /// or the compositor hasn't sent the table yet).
+    dmabuf_format_table: Vec<(u32, u64)>,
     /// Keyed by `wl_output` global name (u32). The same key is used as
     /// Dispatch user-data for every per-output child proxy so events
     /// find their owning entry in O(1).
@@ -253,6 +282,10 @@ impl App {
             dmabuf: None,
             viewporter: None,
             fractional_scale_mgr: None,
+            dmabuf_feedback: None,
+            compositor_drm_major: 0,
+            compositor_drm_minor: 0,
+            dmabuf_format_table: Vec::new(),
             outputs: HashMap::new(),
             uds_sock,
             name_prefix,
@@ -534,6 +567,146 @@ impl Dispatch<WlOutput, u32> for App {
     }
 }
 
+impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        _p: &ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // dmabuf v4 deprecates the v1.format / v1.modifier broadcasts
+        // and delivers the format/modifier set + GPU identity via this
+        // feedback object instead. Compositors built on smithay
+        // (COSMIC) stop emitting v3 events once a client binds at v4,
+        // so we MUST ingest everything from here. Events:
+        //   - main_device(dev): the compositor's main render-node.
+        //   - format_table(fd, size): one-shot memfd of (fourcc, mod)
+        //     records. We index into this from tranche_formats.
+        //   - tranche_target_device(dev): which GPU the next
+        //     tranche_formats applies to. We accept all tranches —
+        //     the daemon's picker filters at negotiation time.
+        //   - tranche_formats(indices): u16 indices into format_table.
+        //   - tranche_flags(uint): scanout/etc; ignored for our path.
+        //   - tranche_done / done: terminators; informational.
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                if device.len() < 8 {
+                    log::warn!(
+                        "dmabuf_feedback: main_device {} bytes (want >=8); ignoring",
+                        device.len()
+                    );
+                    return;
+                }
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&device[..8]);
+                let dev = u64::from_ne_bytes(buf);
+                // glibc dev_t encoding (gnu_dev_major / gnu_dev_minor):
+                //   major = ((dev >> 8) & 0xfff) | ((dev >> 32) & ~0xfff)
+                //   minor = (dev & 0xff)         | ((dev >> 12) & ~0xff)
+                let major = (((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff_u64)) as u32;
+                let minor = ((dev & 0xff) | ((dev >> 12) & !0xff_u64)) as u32;
+                log::info!(
+                    "dmabuf_feedback: main_device dev_t=0x{dev:x} → DRM render-node {major}:{minor}"
+                );
+                state.compositor_drm_major = major;
+                state.compositor_drm_minor = minor;
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::FormatTable { fd, size } => {
+                let size = size as usize;
+                let mut bytes = vec![0u8; size];
+                // Read at absolute offset 0 (`pread`), NOT a sequential
+                // `read` — the compositor sends one memfd to every
+                // client via SCM_RIGHTS, and they all share the same
+                // `f_pos`. If a prior client (or the compositor's own
+                // write) left the cursor at EOF, sequential reads
+                // return zero bytes → tranche_formats fires before any
+                // table data lands → fallback to LINEAR. Positional
+                // reads are unaffected.
+                let file = std::fs::File::from(fd);
+                if let Err(e) = file.read_exact_at(&mut bytes, 0) {
+                    log::warn!("dmabuf_feedback: format_table read failed: {e}");
+                    return;
+                }
+                if size % 16 != 0 {
+                    log::warn!(
+                        "dmabuf_feedback: format_table size={size} is not a multiple of 16 \
+                         (record size); truncating"
+                    );
+                }
+                let entries: Vec<(u32, u64)> = bytes
+                    .chunks_exact(16)
+                    .map(|c| {
+                        let fourcc = u32::from_ne_bytes(c[0..4].try_into().unwrap());
+                        // bytes 4..8 are padding
+                        let modifier = u64::from_ne_bytes(c[8..16].try_into().unwrap());
+                        (fourcc, modifier)
+                    })
+                    .collect();
+                log::info!(
+                    "dmabuf_feedback: format_table loaded {} entries",
+                    entries.len()
+                );
+                state.dmabuf_format_table = entries;
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheFormats { indices } => {
+                if state.dmabuf_format_table.is_empty() {
+                    log::warn!(
+                        "dmabuf_feedback: tranche_formats before format_table; dropping {} bytes",
+                        indices.len()
+                    );
+                    return;
+                }
+                let table = &state.dmabuf_format_table;
+                let table_len = table.len();
+                let Ok(mut caps) = state.dmabuf_caps.lock() else {
+                    return;
+                };
+                let mut added = 0usize;
+                let mut oor = 0usize;
+                for chunk in indices.chunks_exact(2) {
+                    let idx = u16::from_ne_bytes([chunk[0], chunk[1]]) as usize;
+                    let Some(&(fourcc, modifier)) = table.get(idx) else {
+                        oor += 1;
+                        continue;
+                    };
+                    if caps.entry(fourcc).or_default().insert(modifier) {
+                        added += 1;
+                    }
+                }
+                log::debug!(
+                    "dmabuf_feedback: tranche added {added} new (fourcc,mod) pairs \
+                     ({} indices, {oor} out-of-range, table_len={table_len})",
+                    indices.len() / 2
+                );
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheTargetDevice { .. }
+            | zwp_linux_dmabuf_feedback_v1::Event::TrancheFlags { .. }
+            | zwp_linux_dmabuf_feedback_v1::Event::TrancheDone => {
+                // Informational. We accept formats from every tranche.
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::Done => {
+                let count: usize = state
+                    .dmabuf_caps
+                    .lock()
+                    .map(|g| g.values().map(|v| v.len()).sum())
+                    .unwrap_or(0);
+                let fourccs = state
+                    .dmabuf_caps
+                    .lock()
+                    .map(|g| g.len())
+                    .unwrap_or(0);
+                log::info!(
+                    "dmabuf_feedback: done — caps now hold {fourccs} fourccs, \
+                     {count} (fourcc,mod) entries"
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<WpFractionalScaleManagerV1, ()> for App {
     fn event(
         _state: &mut Self,
@@ -667,6 +840,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, u32> for App {
                         registered: AtomicBool::new(false),
                         send_lock: Mutex::new(()),
                         last_pushed_size: Mutex::new(None),
+                        drm_render_major: state.compositor_drm_major,
+                        drm_render_minor: state.compositor_drm_minor,
                     })
                 });
                 // `width` / `height` from `configure` are in *logical*
@@ -944,11 +1119,13 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
                 width,
                 height,
                 refresh_mhz: 60_000,
-                // layer-shell hands the dmabuf to the compositor (which
-                // imports on its own GPU); we don't introspect that here,
-                // so report unknown and let the daemon force HOST_VISIBLE.
-                drm_render_major: 0,
-                drm_render_minor: 0,
+                // Sourced from `wp_linux_dmabuf_feedback_v1::main_device`
+                // (v4+). `(0, 0)` when the compositor advertises dmabuf
+                // < v4 — the daemon then falls back to its UNKNOWN path
+                // (CompatLinear + HOST_VISIBLE), same behavior as before
+                // this fix.
+                drm_render_major: binding.drm_render_major,
+                drm_render_minor: binding.drm_render_minor,
                 properties: Vec::new(),
             },
             &[],
@@ -1038,11 +1215,30 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
                 mod_counts,
                 modifiers,
                 plane_counts,
+                // Vulkan device UUID isn't exposed by the dmabuf v4
+                // feedback protocol (`main_device` carries dev_t, not a
+                // UUID). Leave the UUID empty and let the picker's
+                // `same_device` check fall through to DRM major:minor
+                // matching — which now works because we populate
+                // drm_render_* below.
                 device_uuid: vec![0, 0, 0, 0],
                 driver_uuid: vec![0, 0, 0, 0],
-                drm_render_major: 0,
-                drm_render_minor: 0,
-                mem_hints: N::MEM_HINT_HOST_VISIBLE,
+                // Critical: the daemon's negotiator builds the consumer
+                // `PeerCaps` from THIS message, not `RegisterDisplay`.
+                // Reporting 0:0 here defeats the picker's same-device
+                // check (DrmNode::UNKNOWN) and forces CompatLinear even
+                // when both peers are on the same physical GPU.
+                drm_render_major: binding.drm_render_major,
+                drm_render_minor: binding.drm_render_minor,
+                // The helper hands the dmabuf fd straight to the
+                // Wayland compositor; we never touch the memory
+                // ourselves. Advertise both so the picker can pick
+                // DEVICE_LOCAL when the renderer also supports it —
+                // see `pick_mem_hint_same_dev` (negotiate.rs:580).
+                // HOST_VISIBLE forces UMA-bandwidth-heavy transfers
+                // every frame on iGPUs; DEVICE_LOCAL keeps the buffer
+                // in tiled GPU memory across producer→compositor.
+                mem_hints: N::MEM_HINT_DEVICE_LOCAL | N::MEM_HINT_HOST_VISIBLE,
                 sync_caps: N::SYNC_SYNCOBJ_TIMELINE | N::SYNC_SYNCOBJ_BINARY,
                 color_caps: N::DEFAULT_COLOR,
                 extent_max_w: 7680,
@@ -1455,12 +1651,24 @@ fn main() -> Result<()> {
                 ));
             }
             "zwp_linux_dmabuf_v1" => {
-                app.dmabuf = Some(globals.registry().bind::<ZwpLinuxDmabufV1, _, _>(
+                // v4 added the feedback object that delivers
+                // `main_device` — the compositor's main rendering GPU.
+                // Without it we'd report DrmNode::UNKNOWN and the
+                // daemon's picker would force CompatLinear (LINEAR
+                // modifier, cross-device pessimism) even on single-GPU
+                // systems. Bind v4 when offered; v3 still works
+                // (format/modifier broadcasts unchanged) — we just lose
+                // the GPU identity and stay on the slow path.
+                let dmabuf = globals.registry().bind::<ZwpLinuxDmabufV1, _, _>(
                     g.name,
-                    g.version.min(3),
+                    g.version.min(4),
                     &qh,
                     (),
-                ));
+                );
+                if dmabuf.version() >= 4 {
+                    app.dmabuf_feedback = Some(dmabuf.get_default_feedback(&qh, ()));
+                }
+                app.dmabuf = Some(dmabuf);
             }
             "wp_viewporter" => {
                 app.viewporter = Some(globals.registry().bind::<WpViewporter, _, _>(
@@ -1521,9 +1729,11 @@ fn main() -> Result<()> {
         bail!("no wl_output available");
     }
     log::info!(
-        "bound globals: compositor + layer_shell + dmabuf + viewporter:{} + fractional_scale:{} + {} output(s)",
+        "bound globals: compositor + layer_shell + dmabuf:v{} + viewporter:{} + fractional_scale:{} + dmabuf_feedback:{} + {} output(s)",
+        app.dmabuf.as_ref().map(|d| d.version()).unwrap_or(0),
         app.viewporter.is_some(),
         app.fractional_scale_mgr.is_some(),
+        app.dmabuf_feedback.is_some(),
         app.outputs.len()
     );
 
