@@ -145,7 +145,7 @@ cmake --install "$BUILD_DIR"
 
 # ---- 4.5 Build open-wallpaper-engine (waywallen-wescene-renderer) ----
 # Pinned commit; bump explicitly when integrating new owe changes.
-OWE_COMMIT="46337efac304c3d9001d8b3182afb2bc9d5a0fd8"
+OWE_COMMIT="b74e389eb4406cf7471c9962b89d5e138158596d"
 OWE_SRC="$PROJECT_DIR/build/_owe-src"
 OWE_BUILD="$PROJECT_DIR/build/_owe-build"
 
