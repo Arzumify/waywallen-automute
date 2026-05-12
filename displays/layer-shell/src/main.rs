@@ -5,7 +5,7 @@ use std::net::Shutdown;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -28,6 +28,10 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
 use wayland_protocols::wp::viewporter::client::{
     wp_viewport::{self, WpViewport},
     wp_viewporter::{self, WpViewporter},
+};
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1::{self, WpFractionalScaleManagerV1},
+    wp_fractional_scale_v1::{self, WpFractionalScaleV1},
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{self, Layer, ZwlrLayerShellV1},
@@ -134,6 +138,13 @@ struct OutputBinding {
     /// updated before worker spawns (we roundtrip after bind so
     /// output metadata has landed).
     scale: std::sync::atomic::AtomicI32,
+    /// Preferred fractional scale from `wp_fractional_scale_v1` in
+    /// 1/120 units. `0` means the protocol either isn't bound or
+    /// hasn't delivered `preferred_scale` yet — fall back to integer
+    /// `scale`. Computing physical = round(logical × scale / 120)
+    /// avoids the ceil-rounding error that produces 4096×2304 for a
+    /// 2560×1440 monitor at 1.25× (integer scale = 2 → over-allocates).
+    fractional_scale_120: AtomicU32,
     /// Optional `wp_viewport` — when bound, gives us explicit
     /// source-rect/dest-rect mapping between buffer and surface
     /// (handles HiDPI + `SetConfig` crop). Absent → fall back to
@@ -195,6 +206,13 @@ struct OutputEntry {
     /// Latest integer scale from `wl_output::scale`. Sampled into the
     /// binding on first configure. `1` when the event hasn't fired.
     scale: i32,
+    /// Per-surface `wp_fractional_scale_v1`, when the compositor
+    /// advertised the manager global. Drops on hot-unplug.
+    fractional_scale: Option<WpFractionalScaleV1>,
+    /// Latest `preferred_scale` in 1/120 units. `0` = not delivered
+    /// yet; the configure path falls back to integer `scale` until
+    /// the event arrives.
+    fractional_scale_120: u32,
 }
 
 struct App {
@@ -206,6 +224,13 @@ struct App {
     /// every commit. Older compositors without it fall back to
     /// `wl_surface::set_buffer_scale`.
     viewporter: Option<WpViewporter>,
+    /// Optional `wp_fractional_scale_manager_v1` — when present we
+    /// request a `wp_fractional_scale_v1` per surface and size the
+    /// buffer with the exact preferred scale instead of the integer
+    /// ceiling reported by `wl_output::scale`. Requires viewporter to
+    /// be useful (the buffer is sized in physical pixels and the
+    /// viewport maps it back onto the logical surface extent).
+    fractional_scale_mgr: Option<WpFractionalScaleManagerV1>,
     /// Keyed by `wl_output` global name (u32). The same key is used as
     /// Dispatch user-data for every per-output child proxy so events
     /// find their owning entry in O(1).
@@ -227,6 +252,7 @@ impl App {
             layer_shell: None,
             dmabuf: None,
             viewporter: None,
+            fractional_scale_mgr: None,
             outputs: HashMap::new(),
             uds_sock,
             name_prefix,
@@ -267,10 +293,18 @@ impl App {
             .viewporter
             .as_ref()
             .map(|vp| vp.get_viewport(&surface, qh, output_name));
+        // wp_fractional_scale_v1 is per-surface — request it before
+        // commit so `preferred_scale` is delivered alongside the first
+        // configure (avoids one round of mis-sizing on startup).
+        let fractional_scale = self
+            .fractional_scale_mgr
+            .as_ref()
+            .map(|m| m.get_fractional_scale(&surface, qh, output_name));
         surface.commit();
         entry.surface = Some(surface);
         entry.layer_surface = Some(layer_surface);
         entry.viewport = viewport;
+        entry.fractional_scale = fractional_scale;
         log::info!("output {output_name}: layer_surface committed, waiting for configure");
     }
 
@@ -336,6 +370,8 @@ impl Dispatch<WlRegistry, GlobalListContents> for App {
                             binding: None,
                             worker_started: false,
                             scale: 1,
+                            fractional_scale: None,
+                            fractional_scale_120: 0,
                         },
                     );
                     log::info!("hot-plug: wl_output name={name} added; bringing up surface");
@@ -498,6 +534,77 @@ impl Dispatch<WlOutput, u32> for App {
     }
 }
 
+impl Dispatch<WpFractionalScaleManagerV1, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _p: &WpFractionalScaleManagerV1,
+        _e: wp_fractional_scale_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // wp_fractional_scale_manager_v1 emits no events.
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, u32> for App {
+    fn event(
+        state: &mut Self,
+        _p: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        data: &u32,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            let output_name = *data;
+            let Some(entry) = state.outputs.get_mut(&output_name) else {
+                return;
+            };
+            entry.fractional_scale_120 = scale;
+            let Some(binding) = entry.binding.as_ref() else {
+                // No layer_surface configure yet — the configure path
+                // will read entry.fractional_scale_120 when it runs.
+                log::info!(
+                    "output {output_name}: preferred_scale={scale}/120 (cached, pre-configure)"
+                );
+                return;
+            };
+            binding.fractional_scale_120.store(scale, Ordering::SeqCst);
+            // If we've already been configured, recompute physical and
+            // push UpdateDisplay so the daemon resizes its buffer pool.
+            let logical = *binding.logical_size.lock().unwrap();
+            let Some((lw, lh)) = logical else {
+                return;
+            };
+            let physical = if entry.viewport.is_some() {
+                let f = scale as u64;
+                (
+                    ((lw as u64 * f + 60) / 120) as u32,
+                    ((lh as u64 * f + 60) / 120) as u32,
+                )
+            } else {
+                let s = entry.scale.max(1) as u32;
+                (lw.saturating_mul(s), lh.saturating_mul(s))
+            };
+            let prev = *binding.configured_size.lock().unwrap();
+            if prev == Some(physical) {
+                return;
+            }
+            *binding.configured_size.lock().unwrap() = Some(physical);
+            log::info!(
+                "output {output_name}: preferred_scale={scale}/120 → physical {}x{}",
+                physical.0,
+                physical.1
+            );
+            let arc_binding = binding.clone();
+            if let Err(e) = push_resize_if_registered(&arc_binding, physical) {
+                log::warn!("output {output_name}: push update_display failed: {e}");
+            }
+        }
+    }
+}
+
 impl Dispatch<ZwlrLayerShellV1, ()> for App {
     fn event(
         _state: &mut Self,
@@ -550,6 +657,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, u32> for App {
                         configured_size: Mutex::new(None),
                         logical_size: Mutex::new(None),
                         scale: std::sync::atomic::AtomicI32::new(entry.scale.max(1)),
+                        fractional_scale_120: AtomicU32::new(entry.fractional_scale_120),
                         viewport: entry.viewport.clone(),
                         closed: AtomicBool::new(false),
                         stream: RwLock::new(None),
@@ -562,22 +670,37 @@ impl Dispatch<ZwlrLayerSurfaceV1, u32> for App {
                     })
                 });
                 // `width` / `height` from `configure` are in *logical*
-                // (surface-local) coordinates. For 1:1 rendering on
-                // HiDPI we ask the daemon to produce a buffer of
-                // `logical × integer_scale` physical pixels and then
-                // map that full buffer back down to the logical surface
-                // extent via `wp_viewporter`.
+                // (surface-local) coordinates. Compute the physical
+                // buffer size:
+                //   * If wp_fractional_scale_v1 has delivered a
+                //     preferred_scale AND we have viewporter to map the
+                //     buffer back, use `logical × scale/120` (rounded).
+                //     This matches the compositor's actual fractional
+                //     scale — e.g. 2048×1152 logical @ 1.25× → 2560×1440.
+                //   * Otherwise fall back to `logical × integer_scale`.
+                //     This ceil-rounds (1.25× → 2) and over-allocates,
+                //     but it's the only safe option without viewporter.
                 let scale = entry.scale.max(1);
                 binding.scale.store(scale, Ordering::SeqCst);
-                let physical = (
-                    width.saturating_mul(scale as u32),
-                    height.saturating_mul(scale as u32),
-                );
+                let f120 = entry.fractional_scale_120;
+                binding.fractional_scale_120.store(f120, Ordering::SeqCst);
+                let physical = if f120 > 0 && entry.viewport.is_some() {
+                    let f = f120 as u64;
+                    (
+                        ((width as u64 * f + 60) / 120) as u32,
+                        ((height as u64 * f + 60) / 120) as u32,
+                    )
+                } else {
+                    (
+                        width.saturating_mul(scale as u32),
+                        height.saturating_mul(scale as u32),
+                    )
+                };
                 *binding.logical_size.lock().unwrap() = Some((width, height));
                 *binding.configured_size.lock().unwrap() = Some(physical);
-                if scale > 1 {
+                if physical != (width, height) {
                     log::info!(
-                        "output {output_name}: logical {width}x{height} × scale {scale} → physical {}x{}",
+                        "output {output_name}: logical {width}x{height} → physical {}x{} (fractional_scale_120={f120}, integer_scale={scale})",
                         physical.0,
                         physical.1
                     );
@@ -600,6 +723,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, u32> for App {
                     entry.layer_surface = None;
                     entry.binding = None;
                     entry.worker_started = false;
+                    entry.fractional_scale = None;
+                    entry.fractional_scale_120 = 0;
                 }
             }
             _ => {}
@@ -1345,6 +1470,15 @@ fn main() -> Result<()> {
                     (),
                 ));
             }
+            "wp_fractional_scale_manager_v1" => {
+                app.fractional_scale_mgr =
+                    Some(globals.registry().bind::<WpFractionalScaleManagerV1, _, _>(
+                        g.name,
+                        g.version.min(1),
+                        &qh,
+                        (),
+                    ));
+            }
             "wl_output" => {
                 let wl_output = globals.registry().bind::<WlOutput, _, _>(
                     g.name,
@@ -1362,6 +1496,8 @@ fn main() -> Result<()> {
                         binding: None,
                         worker_started: false,
                         scale: 1,
+                        fractional_scale: None,
+                        fractional_scale_120: 0,
                     },
                 );
             }
@@ -1385,8 +1521,9 @@ fn main() -> Result<()> {
         bail!("no wl_output available");
     }
     log::info!(
-        "bound globals: compositor + layer_shell + dmabuf + viewporter:{} + {} output(s)",
+        "bound globals: compositor + layer_shell + dmabuf + viewporter:{} + fractional_scale:{} + {} output(s)",
         app.viewporter.is_some(),
+        app.fractional_scale_mgr.is_some(),
         app.outputs.len()
     );
 
