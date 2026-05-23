@@ -221,10 +221,8 @@ mod wire {
 pub enum EventIn {
     Init {
         spawn_version: u32,
-        extent_w: u32,
-        extent_h: u32,
-        extent_mode: u32,
         settings: Vec<(String, String)>,
+        user_properties: String,
     },
     SettingChanged {
         settings: Vec<(String, String)>,
@@ -304,12 +302,10 @@ impl EventIn {
 
     pub fn encode(&self, buf: &mut Vec<u8>) {
         match self {
-            Self::Init { spawn_version, extent_w, extent_h, extent_mode, settings } => {
+            Self::Init { spawn_version, settings, user_properties } => {
                 wire::w_u32(buf, *spawn_version);
-                wire::w_u32(buf, *extent_w);
-                wire::w_u32(buf, *extent_h);
-                wire::w_u32(buf, *extent_mode);
                 wire::w_kv_list(buf, settings);
+                wire::w_string(buf, user_properties);
             }
             Self::SettingChanged { settings } => {
                 wire::w_kv_list(buf, settings);
@@ -362,16 +358,12 @@ impl EventIn {
         let v = match opcode {
             opcode::event_in::INIT => {
                 let spawn_version = r.u32()?;
-                let extent_w = r.u32()?;
-                let extent_h = r.u32()?;
-                let extent_mode = r.u32()?;
                 let settings = r.kv_list()?;
+                let user_properties = r.string()?;
                 Self::Init {
                     spawn_version,
-                    extent_w,
-                    extent_h,
-                    extent_mode,
                     settings,
+                    user_properties,
                 }
             }
             opcode::event_in::SETTING_CHANGED => {

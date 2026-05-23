@@ -310,11 +310,9 @@ mod tests {
     fn roundtrip_init() {
         let (a, b) = pair();
         let sent = EventIn::Init {
-            spawn_version: 3,
-            extent_w: 1920,
-            extent_h: 1080,
-            extent_mode: 0,
+            spawn_version: 5,
             settings: vec![("fps".into(), "60".into()), ("volume".into(), "1.0".into())],
+            user_properties: String::new(),
         };
         let _ = PROTOCOL_VERSION; // silence unused-import warning
         send_control(&a, &sent, &[]).unwrap();

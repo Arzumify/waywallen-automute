@@ -310,29 +310,6 @@ fn layout_override_to_pb(p: &crate::settings::DisplayPrefs) -> pb::LayoutOverrid
     }
 }
 
-fn render_size_policy_to_pb(p: crate::settings::RenderSizePolicy) -> pb::RenderSizePolicy {
-    use crate::settings::RenderSizePolicy as P;
-    match p {
-        P::Native => pb::RenderSizePolicy::Native,
-        P::OneAxisAuto => pb::RenderSizePolicy::OneAxisAuto,
-        P::OneAxisWidth => pb::RenderSizePolicy::OneAxisWidth,
-        P::OneAxisHeight => pb::RenderSizePolicy::OneAxisHeight,
-    }
-}
-
-fn render_size_policy_from_pb(v: i32) -> crate::settings::RenderSizePolicy {
-    use crate::settings::RenderSizePolicy as P;
-    match pb::RenderSizePolicy::try_from(v) {
-        Ok(pb::RenderSizePolicy::Native) => P::Native,
-        Ok(pb::RenderSizePolicy::OneAxisWidth) => P::OneAxisWidth,
-        Ok(pb::RenderSizePolicy::OneAxisHeight) => P::OneAxisHeight,
-        // `OneAxisAuto` is the proto-default (tag 0) and the fallback
-        // when an unknown enum value lands on a newer wire from an
-        // older daemon.
-        _ => P::OneAxisAuto,
-    }
-}
-
 fn fillmode_to_pb(fm: crate::display::layout::FillMode) -> pb::FillMode {
     use crate::display::layout::FillMode as F;
     match fm {
@@ -581,9 +558,6 @@ fn global_event_to_pb(e: &GlobalEvent, state: &Arc<AppState>) -> Option<pb::Even
             Some(pb::Event {
                 payload: Some(pb::event::Payload::SettingsChanged(pb::SettingsChanged {
                     global: Some(pb::GlobalSettings {
-                        target_extent: snap.global.target_extent,
-                        render_size_policy: render_size_policy_to_pb(snap.global.render_size_policy)
-                            as i32,
                         wallpaper_filters,
                         wallpaper_filter_logics,
                         wallpaper_sorts,
@@ -654,9 +628,6 @@ async fn dispatch_inner(
                 },
                 extras: r.metadata,
                 settings,
-                width: r.width,
-                height: r.height,
-                extent_mode: crate::settings::extent_mode::AS_GIVEN,
                 test_pattern: false,
                 renderer_name: None,
                 user_properties_json: None,
@@ -1110,18 +1081,11 @@ async fn dispatch_inner(
                 }
                 def.name.clone()
             };
-            // Render-target hint comes from settings.global. The
-            // policy translates `target_extent` into the wire-level
-            // `(extent_w, extent_h, extent_mode)` triple — see
-            // `crate::settings::resolve_extent`. fps is a per-plugin
-            // concern: pulled out of `[plugin.<name>].fps` if present,
-            // otherwise hardcoded to 30 as a safe last resort. The
-            // remaining `[plugin.<name>]` keys flow into spawn metadata
-            // as baseline kv; per-wallpaper metadata wins on collisions.
-            let g = state.settings.global();
-            let (width, height, extent_mode) =
-                crate::settings::resolve_extent(g.render_size_policy, g.target_extent);
-
+            // Render-target size is the renderer's own decision
+            // (content native + `resolution` plugin setting); the
+            // daemon no longer forwards an extent hint. Per-plugin
+            // settings flow into spawn metadata as baseline kv;
+            // per-wallpaper metadata wins on collisions.
             let plugin_kv = state.settings.plugin(&plugin_name).unwrap_or_default();
 
             // Per-item user-property overrides ride as a separate JSON
@@ -1167,9 +1131,6 @@ async fn dispatch_inner(
                 wp_type: entry.wp_type.clone(),
                 extras,
                 settings: plugin_kv,
-                width,
-                height,
-                extent_mode,
                 test_pattern: false,
                 // Pin reuse + spawn to the explicit pick when the
                 // request named one; otherwise let the manager fall
@@ -1320,9 +1281,6 @@ async fn dispatch_inner(
             };
             Res::SettingsGet(pb::SettingsGetResponse {
                 global: Some(pb::GlobalSettings {
-                    target_extent: snap.global.target_extent,
-                    render_size_policy: render_size_policy_to_pb(snap.global.render_size_policy)
-                        as i32,
                     wallpaper_filters,
                     wallpaper_filter_logics,
                     wallpaper_sorts,
@@ -1386,8 +1344,6 @@ async fn dispatch_inner(
             let prev_layout = state.settings.snapshot().global.layout.clone();
             state.settings.update(|s| {
                 if let Some(g) = r.global.as_ref() {
-                    s.global.target_extent = g.target_extent;
-                    s.global.render_size_policy = render_size_policy_from_pb(g.render_size_policy);
                     s.global.wallpaper_filter = WallpaperFilterState::from_pb(
                         &g.wallpaper_filters,
                         &g.wallpaper_filter_logics,

@@ -1,6 +1,6 @@
 #include "av_image.hpp"
 
-#include "waywallen-bridge/extent_resolve.h"
+#include "waywallen-bridge/resolution.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -62,9 +62,7 @@ std::string av_err_str(int rc) {
 } // namespace
 
 RgbaBuf decode_to_rgba(const std::string& path,
-                       uint32_t           extent_w,
-                       uint32_t           extent_h,
-                       uint32_t           extent_mode,
+                       uint32_t           resolution,
                        DecodeError*       err) {
     RgbaBuf out;
 
@@ -171,12 +169,12 @@ RgbaBuf decode_to_rgba(const std::string& path,
         return out;
     }
 
-    // Resolve daemon's hint against the decoded native size.
-    uint32_t target_w = 0, target_h = 0;
-    ww_resolve_extent(extent_w, extent_h, extent_mode,
-                      static_cast<uint32_t>(src_w),
-                      static_cast<uint32_t>(src_h),
-                      &target_w, &target_h);
+    /* Decode at the file's native size; apply_cap downscales when the
+     * user picked a numeric preset (never upscales for image). */
+    uint32_t target_w = static_cast<uint32_t>(src_w);
+    uint32_t target_h = static_cast<uint32_t>(src_h);
+    ww_resolution_apply_cap(resolution, WW_RESOLUTION_CAP_DEFAULT,
+                            &target_w, &target_h);
 
     SwsPtr sws(sws_getContext(src_w, src_h, src_fmt,
                               static_cast<int>(target_w),

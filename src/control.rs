@@ -95,14 +95,6 @@ async fn apply_wallpaper_core(
     id: &str,
     target: Option<&[DisplayId]>,
 ) -> Result<ApplyResult> {
-    // Render-target hint comes from settings.global; same path as the
-    // WS apply RPC. Hardcoding (0, 0, AS_GIVEN) here would let the
-    // renderer subprocess fall back to its built-in default and break
-    // the documented 1080p minimum.
-    let (width, height, extent_mode) = {
-        let g = app.settings.global();
-        crate::settings::resolve_extent(g.render_size_policy, g.target_extent)
-    };
     let entry = {
         let snap = app.source_snapshot.read().await;
         snap.get(id).cloned()
@@ -145,14 +137,11 @@ async fn apply_wallpaper_core(
             .await;
     }
 
-    // `width`/`height` of `0` are legal — they tell the renderer to
-    // derive that axis from the wallpaper's intrinsic size.
-    // SPAWN_VERSION 3: source plugin's `extras(entry)` Lua callback
-    // returns the CLI argv dict. Lua failures used to fall back to
-    // `entry.metadata` silently; now they surface as
-    // `SourceExtrasFailed` so the dbus / rotator caller learns the
-    // real problem instead of getting a confusing "wrong settings"
-    // follow-up — same policy as the WS apply path.
+    // Source plugin's `extras(entry)` Lua callback returns the CLI
+    // argv dict. Lua failures surface as `SourceExtrasFailed` so the
+    // dbus / rotator caller learns the real problem instead of
+    // getting a confusing "wrong settings" follow-up — same policy
+    // as the WS apply path.
     let extras = app
         .source_manager
         .lock()
@@ -193,9 +182,6 @@ async fn apply_wallpaper_core(
         wp_type: entry.wp_type.clone(),
         extras,
         settings: spawn_settings,
-        width,
-        height,
-        extent_mode,
         test_pattern: false,
         renderer_name: None,
         user_properties_json,

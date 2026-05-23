@@ -34,8 +34,6 @@ auto map_to_layout(const QVariantMap& m) -> proto::LayoutPrefs {
 
 auto global_to_map(const proto::GlobalSettings& g) -> QVariantMap {
     QVariantMap m;
-    m[u"targetExtent"_s]     = g.targetExtent();
-    m[u"renderSizePolicy"_s] = static_cast<int>(g.renderSizePolicy());
     QVariantList wallpaper_filters;
     for (const auto& filter : g.wallpaperFilters()) {
         wallpaper_filters.append(QVariant::fromValue(filter));
@@ -72,9 +70,6 @@ auto plugins_to_map(const proto::SettingsGetResponse::PluginsEntry& src) -> QVar
 
 auto map_to_global(const QVariantMap& m) -> proto::GlobalSettings {
     proto::GlobalSettings g;
-    g.setTargetExtent(m.value(u"targetExtent"_s).toUInt());
-    g.setRenderSizePolicy(
-        static_cast<proto::RenderSizePolicy>(m.value(u"renderSizePolicy"_s).toInt()));
     QList<proto::WallpaperFilterRule> wallpaper_filters;
     for (const auto& value : m.value(u"wallpaperFilters"_s).toList()) {
         wallpaper_filters.append(value.value<proto::WallpaperFilterRule>());

@@ -24,7 +24,7 @@ use crate::ipc::uds::{recv_event, send_control, CodecError};
 /// Spawn-time `Init` payload version the daemon currently emits. Bump
 /// this when the wire shape of `ControlMsg::Init` changes; renderers
 /// reply with `EventMsg::InitNack` if they don't recognise the value.
-pub const SPAWN_VERSION: u32 = 4;
+pub const SPAWN_VERSION: u32 = 5;
 use crate::plugin::renderer_registry::{RendererDef, RendererRegistry};
 use crate::routing::Router;
 use crate::wallpaper_type::WallpaperType;
@@ -51,15 +51,6 @@ pub struct SpawnRequest {
     /// Identity-tagged keys (per the manifest schema) gate reuse;
     /// non-identity keys can be hot-applied via `ApplySettings`.
     pub settings: HashMap<String, String>,
-    /// Hint to the renderer for one or both render-target axes. `0` on
-    /// either axis means "renderer fills this in from native". See
-    /// `extent_mode` for the interpretation.
-    pub width: u32,
-    pub height: u32,
-    /// Wire-level interpretation of `width`/`height`; values match
-    /// `crate::settings::extent_mode::*` (and `ww_extent_mode_t` in
-    /// the C bridge). `0` = `AS_GIVEN`.
-    pub extent_mode: u32,
     /// When true, pass `--test-pattern` to the renderer host, which
     /// bypasses `SceneWallpaper::loadScene` and drives the offscreen
     /// ExSwapchain ring on a host-owned timer. Used to bring up the
@@ -154,12 +145,6 @@ const SYNC_FD_RETENTION: usize = 16;
 pub struct RendererHandle {
     pub id: RendererId,
     pub wp_type: WallpaperType,
-    pub width: u32,
-    pub height: u32,
-    /// Mirrors `SpawnRequest.extent_mode` so reuse can distinguish two
-    /// requests that share the same `width`/`height` but disagree on
-    /// the daemon's interpretation hint.
-    pub extent_mode: u32,
     /// The `SpawnRequest.extras` this renderer was started with —
     /// canonical resource path + manifest-allowlisted keys
     /// (`assets`, `workshop_id`, …) that ride on CLI argv. This is
@@ -281,18 +266,16 @@ impl RendererHandle {
     }
 
     /// Actual texture dimensions reported by the renderer's most recent
-    /// `BindBuffers`. Falls back to the spawn-time `(width, height)`
-    /// hint until the first BindBuffers arrives — the spawn-time hint
-    /// is just `Init.extent_w/h`, which after the renderer resolves
-    /// it against the wallpaper's intrinsic size may not match the
-    /// actual buffer dims.
+    /// `BindBuffers`. `(0, 0)` until the first BindBuffers arrives —
+    /// daemon no longer carries a spawn-time size hint, the renderer
+    /// picks its own extent from content + `resolution` setting.
     pub fn texture_size(&self) -> (u32, u32) {
         if let Ok(g) = self.bind_snapshot.lock() {
             if let Some(snap) = g.as_ref() {
                 return (snap.width, snap.height);
             }
         }
-        (self.width, self.height)
+        (0, 0)
     }
 
     /// Current placement flags from the latest `BindBuffers`, or 0 if
@@ -731,9 +714,6 @@ impl RendererManager {
         let handle = Arc::new(RendererHandle {
             id: id.clone(),
             wp_type: req.wp_type.clone(),
-            width: req.width,
-            height: req.height,
-            extent_mode: req.extent_mode,
             extras: req.extras.clone(),
             name: renderer_def.name.clone(),
             pid: child_pid,
@@ -774,7 +754,7 @@ impl RendererManager {
             let mut inner = self.inner.lock().await;
             inner.renderers.insert(id.clone(), handle);
         }
-        log::info!("spawned renderer {id} ({}x{})", req.width, req.height);
+        log::info!("spawned renderer {id} ({})", req.wp_type);
         Ok(id)
     }
 
@@ -787,8 +767,7 @@ impl RendererManager {
     /// mismatches against the typed `req.fps`, see below).
     ///
     /// Reuse a live renderer when:
-    ///   - structural: `wp_type` / `width` / `height` / `extent_mode` /
-    ///     resolved renderer plugin name all match.
+    ///   - structural: `wp_type` / resolved renderer plugin name match.
     ///   - per-spawn: `extras` matches (different `path` ⇒ different
     ///     wallpaper ⇒ different renderer process).
     ///
@@ -805,12 +784,7 @@ impl RendererManager {
 
         let inner = self.inner.lock().await;
         for (id, h) in inner.renderers.iter() {
-            if h.wp_type != req.wp_type
-                || h.width != req.width
-                || h.height != req.height
-                || h.extent_mode != req.extent_mode
-                || h.name != def.name
-            {
+            if h.wp_type != req.wp_type || h.name != def.name {
                 continue;
             }
             if h.extras != req.extras {
@@ -1508,9 +1482,6 @@ pub(crate) fn build_init_msg(req: &SpawnRequest, def: &RendererDef) -> ControlMs
 
     ControlMsg::Init {
         spawn_version,
-        extent_w: req.width,
-        extent_h: req.height,
-        extent_mode: req.extent_mode,
         settings,
         user_properties: req.user_properties_json.clone().unwrap_or_default(),
     }
@@ -1618,9 +1589,6 @@ impl RendererHandle {
         Arc::new(Self {
             id: id.into(),
             wp_type: wp_type.into(),
-            width: 1920,
-            height: 1080,
-            extent_mode: 0,
             extras: HashMap::new(),
             name: "test-stub".into(),
             pid: None,
@@ -1753,9 +1721,6 @@ mod init_handshake_tests {
             extras: HashMap::new(),
             wp_type: "video".into(),
             settings: settings_in,
-            width: 1920,
-            height: 1080,
-            extent_mode: 0,
             test_pattern: false,
             renderer_name: None,
             user_properties_json: None,
@@ -1764,16 +1729,10 @@ mod init_handshake_tests {
         match msg {
             ControlMsg::Init {
                 spawn_version,
-                extent_w,
-                extent_h,
-                extent_mode,
                 settings,
                 user_properties,
             } => {
                 assert_eq!(spawn_version, 1); // pulled from def_mpv_schema
-                assert_eq!(extent_w, 1920);
-                assert_eq!(extent_h, 1080);
-                assert_eq!(extent_mode, 0);
                 assert_eq!(settings, vec![("loop_file".to_string(), "inf".to_string())]);
                 assert_eq!(user_properties, "");
             }
@@ -1816,10 +1775,7 @@ mod init_handshake_tests {
             extras: HashMap::new(),
             wp_type: "scene".into(),
             settings,
-            width: 800,
-            height: 600,
-            extent_mode: 0,
-            test_pattern: false,
+                        test_pattern: false,
             renderer_name: None,
             user_properties_json: None,
         };
@@ -1888,10 +1844,7 @@ mod reuse_tests {
         Arc::new(RendererHandle {
             id: id.into(),
             wp_type: "video".into(),
-            width: 1920,
-            height: 1080,
-            extent_mode: 0,
-            extras,
+                        extras,
             name: "waywallen-mpv".into(),
             pid: None,
             gpu: DrmNode::UNKNOWN,
@@ -1915,10 +1868,7 @@ mod reuse_tests {
             extras,
             wp_type: "video".into(),
             settings: HashMap::new(),
-            width: 1920,
-            height: 1080,
-            extent_mode: 0,
-            test_pattern: false,
+                        test_pattern: false,
             renderer_name: None,
             user_properties_json: None,
         }
@@ -1977,10 +1927,7 @@ mod reuse_tests {
         let h = Arc::new(RendererHandle {
             id: "h1".into(),
             wp_type: "video".into(),
-            width: 1920,
-            height: 1080,
-            extent_mode: 0,
-            extras: HashMap::new(),
+                        extras: HashMap::new(),
             name: "waywallen-mpv".into(),
             pid: None,
             gpu: DrmNode::UNKNOWN,

@@ -439,8 +439,10 @@ void ww_bridge_control_free(ww_bridge_control_t *msg);
  *                                "rejected");
  *       exit(1);
  *   }
- *   // ... use init.{extent_w,extent_h,fps,resource_*,settings}
- *   //     to drive Vulkan/EGL/mpv init ...
+ *   // ... use init.{settings, user_properties} to drive renderer init.
+ *   //     Render-target size is the renderer's own choice — combine
+ *   //     its content's native size with the `resolution` kv if the
+ *   //     manifest declares one (see <waywallen-bridge/resolution.h>).
  *   ww_bridge_init_free(&init);
  * ----------------------------------------------------------------------- */
 
@@ -448,38 +450,19 @@ void ww_bridge_control_free(ww_bridge_control_t *msg);
  * the wire shape of `ww_evt_in_init_t` (or `ww_bridge_init_t`) changes;
  * `ww_bridge_recv_init` validates the value sent by the daemon
  * matches and returns -EPROTO otherwise. */
-#define WW_BRIDGE_SUPPORTED_SPAWN_VERSION 4u
+#define WW_BRIDGE_SUPPORTED_SPAWN_VERSION 5u
 
-/* Interpretation of the daemon's `extent_w`/`extent_h` hints in
- * `ww_bridge_init_t`. See <waywallen-bridge/extent_resolve.h> for the
- * shared resolver every renderer should call after it knows its
- * content's intrinsic (native) size. */
-typedef enum ww_extent_mode {
-    /* `0` on either axis = "renderer fills this in from native"; both
-     * 0 = fully native; both >0 = exact size requested. */
-    WW_EXTENT_MODE_AS_GIVEN    = 0,
-    /* The renderer chooses which native axis is shorter and fits it
-     * to `max(extent_w, extent_h)`; the other axis scales to keep
-     * the native aspect ratio. Used when the user picks a target
-     * pixel size without specifying width vs height. */
-    WW_EXTENT_MODE_FIT_SHORTER = 1,
-} ww_extent_mode_t;
-
-/* Caller-friendly view of the typed Init payload (SPAWN_VERSION 3).
- * The kv list is heap-owned (transferred from the underlying
- * `ww_evt_in_init_t` decode); call `ww_bridge_init_free` exactly once
- * after consumption.
+/* Caller-friendly view of the typed Init payload. The kv list is
+ * heap-owned (transferred from the underlying `ww_evt_in_init_t`
+ * decode); call `ww_bridge_init_free` exactly once after consumption.
  *
  * Resource path + plugin-specific extras (assets, workshop_id, …)
  * arrive on the renderer's CLI argv, NOT in this struct. fps,
- * test_pattern, volume, loop_file, hwdec, render_node, … all live
- * as keys in `settings` whenever the renderer's manifest declares
- * them; no scalar gets promoted to a typed wire field. */
+ * test_pattern, volume, loop_file, hwdec, render_node, resolution, …
+ * all live as keys in `settings` whenever the renderer's manifest
+ * declares them; no scalar gets promoted to a typed wire field. */
 typedef struct ww_bridge_init {
     uint32_t      spawn_version;
-    uint32_t      extent_w;
-    uint32_t      extent_h;
-    uint32_t      extent_mode;       /* ww_extent_mode_t */
     ww_kv_list_t  settings;
     /* Raw JSON object forwarded from the DB row's
      * `user_property_overrides` column (project.json property key →

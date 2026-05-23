@@ -660,9 +660,6 @@ int ww_bridge_recv_init(int sock, ww_bridge_init_t *out) {
      * After this point the union is logically empty so calling
      * `ww_bridge_control_free` on it would double-free; we skip it. */
     out->spawn_version    = ctl.u.init.spawn_version;
-    out->extent_w         = ctl.u.init.extent_w;
-    out->extent_h         = ctl.u.init.extent_h;
-    out->extent_mode      = ctl.u.init.extent_mode;
     out->settings         = ctl.u.init.settings;
     out->user_properties  = ctl.u.init.user_properties;
 

@@ -17,6 +17,7 @@ import wavsen.video;
 #include <waywallen-bridge/ipc_v1.h>
 #include <waywallen-bridge/pool.h>
 #include <waywallen-bridge/probe_vk.h>
+#include <waywallen-bridge/resolution.h>
 
 #include "av_image.hpp"
 
@@ -33,12 +34,11 @@ namespace {
 struct Options {
     std::string ipc_path;
     std::string image_path;
-    /* Daemon-supplied size hint. After decode they are overwritten with
-     * the resolved render extent (`ww_resolve_extent`). */
-    uint32_t    width { 1920 };
-    uint32_t    height { 1080 };
-    /* Wire-level interpretation of `width`/`height`. `0` = AS_GIVEN. */
-    uint32_t    extent_mode { 0 };
+    /* Final decoded extent, set by `decode_to_rgba`. */
+    uint32_t    width { 0 };
+    uint32_t    height { 0 };
+    /* Short-edge cap from the user's `resolution` setting. 0 = ORIGIN. */
+    uint32_t    resolution  { 0 };
     bool        decode_only { false };
     bool        vulkan_probe { false };
     // Test hook
@@ -539,8 +539,8 @@ int main(int argc, char** argv) {
         if (opt.image_path.empty()) die("--decode-only requires --image");
         ww_image::DecodeError derr;
         ww_image::RgbaBuf buf =
-            ww_image::decode_to_rgba(opt.image_path, opt.width, opt.height,
-                                     /* extent_mode = */ 0, &derr);
+            ww_image::decode_to_rgba(opt.image_path,
+                                     /* resolution = */ 0, &derr);
         if (buf.data.empty()) {
             rstd_error("waywallen-image-renderer: decode failed: {}", derr.message);
             return 1;
@@ -586,19 +586,21 @@ int main(int argc, char** argv) {
         die(std::string(reason) + " rc=" + std::to_string(rc));
     }
 
-    // SPAWN_VERSION 3: image path arrives via CLI argv `--path`
-    // (already parsed into opt.image_path). Init carries only extent.
-    opt.width       = init.extent_w;
-    opt.height      = init.extent_h;
-    opt.extent_mode = init.extent_mode;
-    if (opt.render_node.empty()) {
-        for (size_t i = 0; i < init.settings.count; ++i) {
-            const ww_kv_t& kv = init.settings.data[i];
-            if (kv.key && std::strcmp(kv.key, "render_node") == 0
-                && kv.value && *kv.value) {
-                opt.render_node = kv.value;
-                break;
-            }
+    // Image path arrives via CLI argv `--path` (already parsed into
+    // opt.image_path). Init carries only the resolved settings kv.
+    for (size_t i = 0; i < init.settings.count; ++i) {
+        const ww_kv_t& kv = init.settings.data[i];
+        if (!kv.key || !kv.value) continue;
+        if (opt.render_node.empty()
+            && std::strcmp(kv.key, "render_node") == 0
+            && *kv.value) {
+            opt.render_node = kv.value;
+        } else if (std::strcmp(kv.key, "resolution") == 0 && *kv.value) {
+            char* end = nullptr;
+            unsigned long n = std::strtoul(kv.value, &end, 10);
+            opt.resolution = (end != kv.value)
+                ? ww_resolution_sanitize(static_cast<uint32_t>(n))
+                : static_cast<uint32_t>(WW_RESOLUTION_1080P);
         }
     }
     ww_bridge_init_free(&init);
@@ -607,12 +609,11 @@ int main(int argc, char** argv) {
     if (opt.image_path.empty()) die("--path <image-file> is required");
     ww_image::DecodeError derr;
     ww_image::RgbaBuf rgba_buf = ww_image::decode_to_rgba(
-        opt.image_path, opt.width, opt.height, opt.extent_mode, &derr);
+        opt.image_path, opt.resolution, &derr);
     if (rgba_buf.data.empty()) die("decode " + opt.image_path + ": " + derr.message);
 
-    /* `decode_to_rgba` resolved the daemon's hint against the image's
-     * native size; from here on we work with the resolved render
-     * extent. */
+    /* `decode_to_rgba` already applied the resolution cap against the
+     * image's native size; use whatever extent it landed on. */
     opt.width  = rgba_buf.width;
     opt.height = rgba_buf.height;
 

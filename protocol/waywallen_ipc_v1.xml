@@ -133,43 +133,33 @@
        ================================================================== -->
 
   <!--
-    Spawn-time `init` (SPAWN_VERSION 4): typed payload sent by the
-    daemon immediately after accept(). Carries the minimum the
-    renderer needs to allocate its render target (extent triple) plus
-    the resolved L1 `[renderer.settings]` kv list. Resource path and
-    plugin-specific extras (assets, workshop_id, …) ride on the
-    renderer's CLI argv instead — the daemon constructs argv from
-    `source_plugin.extras(entry)` before fork+exec.
+    Spawn-time `init` (SPAWN_VERSION 5): typed payload sent by the
+    daemon immediately after accept(). Carries the resolved L1
+    `[renderer.settings]` kv list and user-property overrides.
+    Render-target size is the renderer's own decision — it combines
+    its content's intrinsic native size with the `resolution` kv
+    (see <waywallen-bridge/resolution.h>) when its manifest declares
+    one. Resource path and plugin-specific extras (assets,
+    workshop_id, …) ride on the renderer's CLI argv instead — the
+    daemon constructs argv from `source_plugin.extras(entry)` before
+    fork+exec.
 
     Fields:
       `spawn_version` — protocol version of the Init payload itself.
                         Renderer MUST send `init_nack` if it does not
-                        recognise the value. Current = 4.
-      `extent_w/h`    — pixel extent. `0` on either axis means
-                        "unspecified — renderer derives that axis
-                        from its content's intrinsic size".
-      `extent_mode`   — interpretation of `extent_w/h`:
-                        `0` = AS_GIVEN: 0-axis means native, both 0
-                              means fully native, both >0 means
-                              exact daemon-imposed size.
-                        `1` = FIT_SHORTER: shorter native axis is
-                              set to `max(extent_w, extent_h)`,
-                              other axis scaled to keep native aspect.
+                        recognise the value. Current = 5.
       `settings`      — manifest-declared tunables, fully resolved
                         (L1 = per-instance override || plugin default ||
                         schema default). All scalar settings — `fps`,
                         `test_pattern`, `volume`, `loop_file`, `hwdec`,
-                        `render_node`, … — live here as kv keys
-                        whenever the renderer's manifest declares
-                        them. No typed scalar promotion: the same kv
-                        shape is used in `setting_changed` for live
-                        diffs.
+                        `render_node`, `resolution`, … — live here as
+                        kv keys whenever the renderer's manifest
+                        declares them. No typed scalar promotion: the
+                        same kv shape is used in `setting_changed` for
+                        live diffs.
   -->
   <event_in name="init" opcode="1">
     <arg name="spawn_version" type="u32"/>
-    <arg name="extent_w" type="u32"/>
-    <arg name="extent_h" type="u32"/>
-    <arg name="extent_mode" type="u32"/>
     <arg name="settings" type="kv_list"/>
     <!--
       `user_properties` — raw JSON dump of the DB row's
@@ -248,9 +238,9 @@
     (fourcc, modifier) pair on this renderer and tries again.
 
     Render-target extent is intentionally NOT a negotiation field.
-    The renderer is the producer and already resolved its render
-    extent from `Init.{extent_w,extent_h,extent_mode}` against its
-    content's intrinsic size; that's what `advertise_caps` carries.
+    The renderer is the producer and already picked its render
+    extent from its content's intrinsic size and (optionally) the
+    `resolution` kv setting; that's what `advertise_caps` carries.
     The bridge sizes its dmabuf slots from that, then `bind_buffers`
     reports the actual buffer dims back to the daemon for the
     consumer side.

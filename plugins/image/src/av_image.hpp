@@ -18,19 +18,16 @@ struct DecodeError {
     std::string message;
 };
 
-// Decode `path` (any container/codec FFmpeg understands), resolve the
-// final render extent against the daemon's hint
-// `(extent_w, extent_h, extent_mode)` using
-// `<waywallen-bridge/extent_resolve.h>`, and scale the first frame to
-// that extent in RGBA8. Scaling uses SWS_BICUBIC. The returned
-// `width`/`height` reflect the **resolved** size — callers should
-// take their render-target dims from the buffer, not from
-// `extent_w`/`extent_h`. Populates `err->message` and returns an
-// empty buffer on failure.
+// Decode `path` (any container/codec FFmpeg understands) at the file's
+// native size, then apply the short-edge cap implied by `resolution`
+// (see `<waywallen-bridge/resolution.h>`) and scale the first frame
+// to that extent in RGBA8 with SWS_BICUBIC. ORIGIN (0) and unknown
+// values keep the native size unchanged; numeric presets only
+// downscale (never upscale a smaller source). The returned
+// `width`/`height` reflect the final scaled size. Populates
+// `err->message` and returns an empty buffer on failure.
 RgbaBuf decode_to_rgba(const std::string& path,
-                       uint32_t           extent_w,
-                       uint32_t           extent_h,
-                       uint32_t           extent_mode,
+                       uint32_t           resolution,
                        DecodeError*       err);
 
 } // namespace ww_image

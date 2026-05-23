@@ -392,9 +392,6 @@ int ww_evt_in_init_encode(const ww_evt_in_init_t *m, ww_buf_t *out) {
     int rc;
     (void)m;
     if ((rc = w_u32(out, m->spawn_version))) return rc;
-    if ((rc = w_u32(out, m->extent_w))) return rc;
-    if ((rc = w_u32(out, m->extent_h))) return rc;
-    if ((rc = w_u32(out, m->extent_mode))) return rc;
     if ((rc = w_kv_list(out, &m->settings))) return rc;
     if ((rc = w_string(out, m->user_properties))) return rc;
     return WW_OK;
@@ -405,9 +402,6 @@ int ww_evt_in_init_decode(const uint8_t *buf, size_t len, ww_evt_in_init_t *out)
     ww_rd_t r = { buf, 0, len };
     int rc;
     if ((rc = rd_u32(&r, &out->spawn_version))) goto fail;
-    if ((rc = rd_u32(&r, &out->extent_w))) goto fail;
-    if ((rc = rd_u32(&r, &out->extent_h))) goto fail;
-    if ((rc = rd_u32(&r, &out->extent_mode))) goto fail;
     if ((rc = rd_kv_list(&r, &out->settings))) goto fail;
     if ((rc = rd_string(&r, &out->user_properties))) goto fail;
     if (r.pos != r.len) {

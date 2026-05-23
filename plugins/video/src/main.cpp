@@ -18,10 +18,10 @@ import wavsen.audio;
 #include <rstd/macro.hpp>
 
 #include <waywallen-bridge/bridge.h>
-#include <waywallen-bridge/extent_resolve.h>
 #include <waywallen-bridge/ipc_v1.h>
 #include <waywallen-bridge/pool.h>
 #include <waywallen-bridge/probe_vk.h>
+#include <waywallen-bridge/resolution.h>
 
 #include <errno.h>
 #include <signal.h>
@@ -491,12 +491,8 @@ int main(int argc, char** argv) {
         ww_bridge_init_free(&init);
         die(std::string(reason) + " rc=" + std::to_string(rc));
     }
-    uint32_t init_extent_w    = init.extent_w;
-    uint32_t init_extent_h    = init.extent_h;
-    uint32_t init_extent_mode = init.extent_mode;
-    // SPAWN_VERSION 3: video path arrives via CLI argv `--path`
-    // (already in opt.video_path). Init carries only extent + the
-    // resolved settings kv list.
+    // Video path arrives via CLI argv `--path` (already in
+    // opt.video_path). Init carries only the resolved settings kv.
     if (const char* v = kv_get(init.settings, "loop_file")) {
         opt.loop_file = !(std::strcmp(v, "no") == 0);
     }
@@ -525,15 +521,21 @@ int main(int argc, char** argv) {
     }
     host.pending_volume.store(volume_pct, std::memory_order_release);
     host.pending_enable_audio.store(enable_audio, std::memory_order_release);
+    uint32_t resolution = static_cast<uint32_t>(WW_RESOLUTION_ORIGIN);
+    if (const char* v = kv_get(init.settings, "resolution"); v && *v) {
+        char* end = nullptr;
+        unsigned long n = std::strtoul(v, &end, 10);
+        resolution = (end != v)
+            ? ww_resolution_sanitize(static_cast<uint32_t>(n))
+            : static_cast<uint32_t>(WW_RESOLUTION_1080P);
+    }
     ww_bridge_init_free(&init);
     if (opt.video_path.empty())
         die("--path <video-file> is required");
 
-    /* Probe the file's native dimensions before allocating any GPU
-     * state, then resolve the daemon's extent hint against them.
-     * `Producer::create_with_render_node` needs the final size up
-     * front, so this has to happen here in main, not inside
-     * VideoDecoder. */
+    /* Probe the file's native dimensions. `Producer::create_with_render_node`
+     * needs the final size up front, so this has to happen here in
+     * main, not inside VideoDecoder. */
     uint32_t native_w = 0, native_h = 0;
     {
         auto probe_res = wavsen::video::VideoDecoder::probe_native(opt.video_path);
@@ -545,8 +547,10 @@ int main(int argc, char** argv) {
         native_w   = probe.width;
         native_h   = probe.height;
     }
-    ww_resolve_extent(init_extent_w, init_extent_h, init_extent_mode,
-                      native_w, native_h, &opt.width, &opt.height);
+    opt.width  = native_w;
+    opt.height = native_h;
+    ww_resolution_apply_cap(resolution, WW_RESOLUTION_CAP_DEFAULT,
+                            &opt.width, &opt.height);
 
     /* NV12 chroma is 4:2:0 → both extents must be even. The decoder
      * rounds up internally too; do it here so all our state agrees. */

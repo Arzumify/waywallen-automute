@@ -44,12 +44,23 @@ ColumnLayout {
     readonly property bool needsRestart: schema.identity === true
 
     readonly property bool isRenderNode: schema.key === "render_node"
+    readonly property bool isResolution: schema.key === "resolution"
+
+    // Wire enum value → display label. Kept in sync with
+    // <waywallen-bridge/resolution.h> WW_RESOLUTION_*.
+    readonly property var resolutionPresets: [
+        { value: "0", label: "Origin" },
+        { value: "1", label: "720p" },
+        { value: "2", label: "1080p" },
+        { value: "3", label: "1440p" },
+        { value: "4", label: "2160p" }
+    ]
 
     readonly property bool isTextField: {
         const t = schema.type;
         if (t === kBool)
             return false;
-        if (root.isRenderNode)
+        if (root.isRenderNode || root.isResolution)
             return false;
         if (t === kString)
             return !(schema.choices && schema.choices.length > 0);
@@ -144,6 +155,8 @@ ColumnLayout {
         sourceComponent: {
             if (root.isRenderNode)
                 return renderNodeField;
+            if (root.isResolution)
+                return resolutionField;
             switch (root.schema.type) {
             case root.kBool:
                 return boolField;
@@ -281,6 +294,46 @@ ColumnLayout {
                 function onValueChanged() {
                     const i = Math.max(0, root.schema.choices.indexOf(root.value));
                     if (cb.currentIndex !== i) cb.currentIndex = i;
+                }
+            }
+        }
+    }
+
+    // Resolution chip list. Wire value is the WW_RESOLUTION_* enum
+    // (string-encoded), filtered against the schema's [min, max] range
+    // so manifests that disallow Origin (e.g. weweb — no native size)
+    // simply omit it.
+    Component {
+        id: resolutionField
+        Flow {
+            spacing: 6
+
+            readonly property int loIdx: {
+                const n = parseInt(root.schema.min || "0", 10);
+                return isNaN(n) ? 0 : n;
+            }
+            readonly property int hiIdx: {
+                const n = parseInt(root.schema.max || "4", 10);
+                return isNaN(n) ? 4 : n;
+            }
+
+            Repeater {
+                model: root.resolutionPresets
+                delegate: MD.FilterChip {
+                    id: resChip
+                    required property var modelData
+                    required property int index
+                    visible: index >= parent.loIdx && index <= parent.hiIdx
+                    text: modelData.label
+                    checked: root.value === modelData.value
+                    onClicked: root._emit(modelData.value)
+                    Connections {
+                        target: root
+                        function onValueChanged() {
+                            const c = root.value === resChip.modelData.value;
+                            if (resChip.checked !== c) resChip.checked = c;
+                        }
+                    }
                 }
             }
         }

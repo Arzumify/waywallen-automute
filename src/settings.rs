@@ -5,8 +5,7 @@
 //!
 //! ```toml
 //! [global]
-//! target_extent       = 1080
-//! render_size_policy  = "one_axis_auto"   # native | one_axis_auto | one_axis_width | one_axis_height
+//! rotation_secs = 0
 //!
 //! [plugin.wescene]
 //! # Free-form per-plugin table: keys are owned by the plugin, not the
@@ -138,50 +137,6 @@ pub struct ResolvedAutopause {
     pub resume_ms: u32,
 }
 
-/// How the daemon shapes the `(extent_w, extent_h, extent_mode)` it
-/// hands to a renderer's `Init` request. The daemon does not know the
-/// wallpaper's intrinsic resolution, so for anything other than
-/// `Native` the renderer is responsible for filling the unspecified
-/// axis (or both) using the helper in
-/// `<waywallen-bridge/extent_resolve.h>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum RenderSizePolicy {
-    /// Send `(0, 0, AS_GIVEN)` — renderer uses its content's intrinsic
-    /// size unchanged.
-    Native,
-    /// Send `(target_extent, target_extent, FIT_SHORTER)` — renderer
-    /// scales its shorter native axis to `target_extent` and the
-    /// longer axis proportionally.
-    #[default]
-    OneAxisAuto,
-    /// Send `(target_extent, 0, AS_GIVEN)` — renderer fits to
-    /// `target_extent` width and computes height.
-    OneAxisWidth,
-    /// Send `(0, target_extent, AS_GIVEN)` — renderer fits to
-    /// `target_extent` height and computes width.
-    OneAxisHeight,
-}
-
-/// `extent_mode` values matching `ww_extent_mode_t` in
-/// `<waywallen-bridge/bridge.h>`. Kept in sync with the C enum by
-/// hand — both sides serialize as a `u32` on the wire.
-pub mod extent_mode {
-    pub const AS_GIVEN: u32 = 0;
-    pub const FIT_SHORTER: u32 = 1;
-}
-
-/// Translate a `RenderSizePolicy` + `target_extent` into the wire-level
-/// `(extent_w, extent_h, extent_mode)` triple sent in `Init`.
-pub fn resolve_extent(policy: RenderSizePolicy, target: u32) -> (u32, u32, u32) {
-    match policy {
-        RenderSizePolicy::Native => (0, 0, extent_mode::AS_GIVEN),
-        RenderSizePolicy::OneAxisAuto => (target, target, extent_mode::FIT_SHORTER),
-        RenderSizePolicy::OneAxisWidth => (target, 0, extent_mode::AS_GIVEN),
-        RenderSizePolicy::OneAxisHeight => (0, target, extent_mode::AS_GIVEN),
-    }
-}
-
 /// Daemon-wide defaults consumed by `WallpaperApply` when a renderer
 /// has no per-plugin override.
 ///
@@ -191,15 +146,6 @@ pub fn resolve_extent(policy: RenderSizePolicy, target: u32) -> (u32, u32, u32) 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalSettings {
-    /// Pixel value applied to whichever axis (or both) the policy
-    /// designates. Ignored when `render_size_policy = Native`.
-    pub target_extent: u32,
-    /// How `target_extent` is mapped onto the (extent_w, extent_h,
-    /// extent_mode) triple in `Init`. Default `OneAxisAuto` — daemon
-    /// asks the renderer to fit its shorter native axis to the
-    /// target, which is sensible for arbitrary aspect ratios without
-    /// hard-coding a 16:9 assumption.
-    pub render_size_policy: RenderSizePolicy,
     pub last_wallpaper: Option<String>,
     /// Queue playback mode: `"sequential"` / `"shuffle"` / `"random"`.
     /// Restored on startup so the rotator resumes the same behavior.
@@ -237,8 +183,6 @@ pub struct GlobalSettings {
 impl Default for GlobalSettings {
     fn default() -> Self {
         Self {
-            target_extent: 1080,
-            render_size_policy: RenderSizePolicy::default(),
             last_wallpaper: None,
             queue_mode: "sequential".to_string(),
             rotation_secs: 0,
@@ -913,37 +857,8 @@ mod tests {
     #[test]
     fn default_roundtrip() {
         let s: Settings = toml::from_str("").unwrap();
-        assert_eq!(s.global.target_extent, 1080);
-        assert_eq!(s.global.render_size_policy, RenderSizePolicy::OneAxisAuto);
+        assert!(s.global.last_wallpaper.is_none());
         assert!(s.plugins.is_empty());
-    }
-
-    #[test]
-    fn global_override_parses() {
-        let src = "[global]\ntarget_extent = 1440\nrender_size_policy = \"one_axis_width\"\n";
-        let s: Settings = toml::from_str(src).unwrap();
-        assert_eq!(s.global.target_extent, 1440);
-        assert_eq!(s.global.render_size_policy, RenderSizePolicy::OneAxisWidth);
-    }
-
-    #[test]
-    fn resolve_extent_modes() {
-        assert_eq!(
-            resolve_extent(RenderSizePolicy::Native, 1080),
-            (0, 0, extent_mode::AS_GIVEN)
-        );
-        assert_eq!(
-            resolve_extent(RenderSizePolicy::OneAxisAuto, 1080),
-            (1080, 1080, extent_mode::FIT_SHORTER)
-        );
-        assert_eq!(
-            resolve_extent(RenderSizePolicy::OneAxisWidth, 1920),
-            (1920, 0, extent_mode::AS_GIVEN)
-        );
-        assert_eq!(
-            resolve_extent(RenderSizePolicy::OneAxisHeight, 1080),
-            (0, 1080, extent_mode::AS_GIVEN)
-        );
     }
 
     #[test]
@@ -1066,15 +981,15 @@ baz = "7"
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
         let store = SettingsStore::load_or_default(path.clone()).await;
-        assert_eq!(store.global().target_extent, 1080);
+        assert_eq!(store.global().rotation_secs, 0);
 
-        store.update(|s| s.global.target_extent = 1440);
+        store.update(|s| s.global.rotation_secs = 30);
         // Wait past the debounce window.
         tokio::time::sleep(DEBOUNCE_WRITE + Duration::from_millis(500)).await;
 
         let written = tokio::fs::read_to_string(&path).await.unwrap();
         let parsed: Settings = toml::from_str(&written).unwrap();
-        assert_eq!(parsed.global.target_extent, 1440);
+        assert_eq!(parsed.global.rotation_secs, 30);
     }
 
     // --- reconcile() tests --------------------------------------------

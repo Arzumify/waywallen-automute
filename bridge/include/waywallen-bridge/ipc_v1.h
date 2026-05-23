@@ -115,9 +115,6 @@ typedef enum ww_event_op {
 
 typedef struct ww_evt_in_init_t {
     uint32_t spawn_version;
-    uint32_t extent_w;
-    uint32_t extent_h;
-    uint32_t extent_mode;
     ww_kv_list_t settings;
     char *user_properties;
 } ww_evt_in_init_t;
