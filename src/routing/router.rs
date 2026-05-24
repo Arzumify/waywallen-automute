@@ -1731,8 +1731,11 @@ impl Router {
     ///
     /// A renderer is paused iff:
     ///   - it has no enabled link (existing ref-count rule), OR
-    ///   - every enabled link's display has `autopause.requested ==
-    ///     true` (per-display window-state opt-in).
+    ///   - ANY enabled link's display has `autopause.requested ==
+    ///     true`. One paused display drags the whole renderer down,
+    ///     because in mirrored / multi-output setups the renderer
+    ///     pipeline is shared and there is no per-display gating
+    ///     downstream of `Pause`.
     async fn reconcile_lifecycle(self: &Arc<Self>) {
         let actions: Vec<(RendererId, ControlMsg, &'static str)> = {
             let mut inner = self.inner.lock().await;
@@ -1748,15 +1751,15 @@ impl Router {
                 // Autopause rule: only meaningful when there IS at
                 // least one active link. With no links the ref-count
                 // rule dominates.
-                let all_autopaused = has_active_link
-                    && links.iter().all(|l| {
+                let any_autopaused = has_active_link
+                    && links.iter().any(|l| {
                         inner
                             .displays
                             .get(&l.display_id)
                             .map(|s| s.autopause.requested)
                             .unwrap_or(false)
                     });
-                let should_pause = !has_active_link || all_autopaused;
+                let should_pause = !has_active_link || any_autopaused;
                 let was_paused = inner.paused_renderers.contains(&rid);
                 if !should_pause && was_paused {
                     inner.paused_renderers.remove(&rid);

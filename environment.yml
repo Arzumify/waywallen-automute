@@ -12,6 +12,7 @@ dependencies:
   - qt6-main>=6.10
   - qt6-wayland>=6.10
   - freetype
+  - expat
 
   # Used to build qtgrpc from source (conda-forge has no Qt6 Protobuf package)
   - libprotobuf

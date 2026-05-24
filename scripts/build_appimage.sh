@@ -89,6 +89,9 @@ set -u
 # ---- 2.4 Build a minimal FFmpeg into the conda env (replaces conda-forge's ffmpeg) ----
 bash "$PROJECT_DIR/scripts/build_ffmpeg.sh"
 
+# ---- 2.4b Copy host syslibs (pipewire, fontconfig) into the conda env ----
+bash "$PROJECT_DIR/scripts/copy_syslibs.sh"
+
 # ---- 2.5 Build the Qt6Protobuf module from source (conda-forge has no qtgrpc package) ----
 QT_VER="$("$CONDA_PREFIX/bin/qmake6" -query QT_VERSION)"
 if [[ ! -f "$CONDA_PREFIX/lib/cmake/Qt6Protobuf/Qt6ProtobufConfig.cmake" ]]; then
@@ -145,7 +148,7 @@ cmake --install "$BUILD_DIR"
 
 # ---- 4.5 Build open-wallpaper-engine (waywallen-wescene-renderer) ----
 # Pinned commit; bump explicitly when integrating new owe changes.
-OWE_COMMIT="b74e389eb4406cf7471c9962b89d5e138158596d"
+OWE_COMMIT="6b0638980a7e11dcf048d52f03dbc3bcc2d72e55"
 OWE_SRC="$PROJECT_DIR/build/_owe-src"
 OWE_BUILD="$PROJECT_DIR/build/_owe-build"
 
@@ -262,10 +265,17 @@ EXTRA_QT_PLUGINS="wayland-decoration-client;wayland-shell-integration" \
 cp -rv "$CONDA_PREFIX/lib/qt6/plugins/wayland-graphics-integration-client" "$APPDIR/usr/plugins/"
 cp -v "$CONDA_PREFIX/lib/libstdc++.so.6" "$APPDIR/usr/lib/"
 cp -v "$CONDA_PREFIX/lib/libgcc_s.so.1" "$APPDIR/usr/lib/"
-cp -rv "$APPDIR/usr/lib/qt6/qml/." "$APPDIR/usr/qml/"
-rm -rf "$APPDIR/usr/lib/qt6"
-rm -rf "$APPDIR/lib"/libQt6QuickDialogs*
-rm -rf "$APPDIR/lib"/libvulkan.so.1 "$APPDIR/lib"/libva*
+
+pushd "$APPDIR"
+cp -rv ./usr/lib/qt6/qml/. ./usr/qml/
+rm -rf ./usr/lib/qt6
+rm -rf ./lib/libQt6QuickDialogs*
+rm -rf ./lib/libvulkan.so.1 ./lib/libva*
+rm -rf ./lib/libgcc_s.so.1
+rm -rf ./lib/libdbus-1.so.3
+rm -rf ./lib/libkrb5*
+rm -rf ./lib/*.a
+popd
 
 # ---- 8. Drop unused QuickControls2 styles (native libs + QML modules) ----
 step "Pruning unused QuickControls2 styles"

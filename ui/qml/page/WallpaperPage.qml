@@ -267,7 +267,7 @@ MD.Page {
                     Layout.fillWidth: true
                     Layout.leftMargin: 16
                     Layout.rightMargin: 16
-                    Layout.topMargin: 12
+                    Layout.topMargin: 4
                     spacing: 8
 
                     MD.EmbedChip {
@@ -375,7 +375,7 @@ MD.Page {
                         cacheBuffer: 300
                         displayMarginBeginning: 300
                         displayMarginEnd: 300
-                        topMargin: 8
+                        topMargin: 2
                         bottomMargin: 8
                         leftMargin: 8
                         rightMargin: 8
@@ -750,7 +750,7 @@ MD.Page {
                                                   : m_description.collapsedLines
                                 elide: m_description.expanded ? Text.ElideNone
                                                               : Text.ElideRight
-                                onLinkActivated: link => Qt.openUrlExternally(link)
+                                onLinkActivated: link => MD.Util.openUrlExternally(link)
                             }
                         }
 
@@ -814,7 +814,7 @@ MD.Page {
                             color: MD.Token.color.on_surface
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
-                            onLinkActivated: link => Qt.openUrlExternally(link)
+                            onLinkActivated: link => MD.Util.openUrlExternally(link)
                         }
 
                         // Bool → switch.

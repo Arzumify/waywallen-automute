@@ -67,13 +67,13 @@ MD.Page {
             MD.Button {
                 text: "GitHub"
                 mdState.type: MD.Enum.BtText
-                onClicked: Qt.openUrlExternally("https://github.com/waywallen")
+                onClicked: MD.Util.openUrlExternally("https://github.com/waywallen")
             }
 
             MD.Button {
                 text: "Issues"
                 mdState.type: MD.Enum.BtText
-                onClicked: Qt.openUrlExternally("https://github.com/waywallen/waywallen/issues")
+                onClicked: MD.Util.openUrlExternally("https://github.com/waywallen/waywallen/issues")
             }
         }
     }

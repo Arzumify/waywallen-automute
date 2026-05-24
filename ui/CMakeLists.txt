@@ -130,6 +130,7 @@ set(QML_FILES
   qml/component/StatusDot.qml
   qml/component/PagePopup.qml
   qml/component/GpuTag.qml
+  qml/component/KdeDisplaysHelp.qml
   qml/component/ThumbnailImage.qml
   qml/component/SearchChip.qml
   qml/component/filter/StringFilter.qml
