@@ -126,12 +126,61 @@ MD.Page {
                     onClicked: root.selectedId = null
                 }
 
-                MD.Text {
+                ColumnLayout {
                     anchors.centerIn: parent
+                    width: Math.min(parent.width - 64, 480)
+                    spacing: 12
                     visible: (root.rects.length === 0)
-                    text: "No displays registered"
-                    typescale: MD.Token.typescale.body_medium
-                    color: MD.Token.color.on_surface_variant
+
+                    MD.Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTr("No displays registered")
+                        typescale: MD.Token.typescale.title_medium
+                        color: MD.Token.color.on_surface_variant
+                    }
+
+                    // KDE-only install hint. On other DEs (wlroots,
+                    // niri, …) the daemon spawns its layer-shell
+                    // backend itself, so there is nothing for the user
+                    // to install — the empty state above is enough.
+                    MD.Text {
+                        Layout.fillWidth: true
+                        visible: W.Util.desktop === W.Util.Desktop.Kde
+                        text: qsTr("KDE Plasma needs the <b>waywallen-display</b> wallpaper extension to bridge wallpapers to the desktop. Install it from either source:")
+                        textFormat: Text.StyledText
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                        typescale: MD.Token.typescale.body_medium
+                        color: MD.Token.color.on_surface
+                    }
+
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: 8
+                        visible: W.Util.desktop === W.Util.Desktop.Kde
+
+                        MD.Button {
+                            text: qsTr("GitHub")
+                            mdState.type: MD.Enum.BtFilledTonal
+                            onClicked: Qt.openUrlExternally("https://github.com/waywallen/waywallen-display")
+                        }
+                        MD.Button {
+                            text: qsTr("KDE Store")
+                            mdState.type: MD.Enum.BtFilledTonal
+                            onClicked: Qt.openUrlExternally("https://store.kde.org/p/2356221")
+                        }
+                    }
+
+                    MD.Text {
+                        Layout.fillWidth: true
+                        visible: W.Util.desktop === W.Util.Desktop.Kde
+                        text: qsTr("Then right-click the desktop → <b>Configure Desktop and Wallpaper…</b> and pick the <b>Waywallen</b> wallpaper plugin.")
+                        textFormat: Text.StyledText
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                        typescale: MD.Token.typescale.body_small
+                        color: MD.Token.color.on_surface_variant
+                    }
                 }
 
                 Repeater {

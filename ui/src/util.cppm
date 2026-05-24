@@ -20,13 +20,28 @@ export class Util : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
+
 public:
+    /// Desktop environment the UI is running under. Detected from
+    /// `XDG_CURRENT_DESKTOP` once at startup; mirrors the daemon's
+    /// `display::spawner::detect_de` semantics. New variants grow
+    /// here when an empty-state hint needs to fork on DE.
+    enum class Desktop {
+        Unknown = 0,
+        Kde     = 1,
+    };
+    Q_ENUM(Desktop)
+
+    Q_PROPERTY(Desktop desktop READ desktop CONSTANT FINAL)
+
     explicit Util(QObject* parent);
     ~Util() override;
     Util() = delete;
 
     static Util* instance();
     static Util* create(QQmlEngine*, QJSEngine*);
+
+    Desktop     desktop() const;
 
     Q_INVOKABLE QString bbcodeToHtml(const QString& src) const;
 

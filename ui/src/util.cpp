@@ -24,6 +24,23 @@ Util* Util::create(QQmlEngine*, QJSEngine*) {
 Util::Util(QObject* parent): QObject(parent) {}
 Util::~Util() = default;
 
+Util::Desktop Util::desktop() const {
+    // Mirrors `display::spawner::detect_de` on the daemon side: any
+    // `XDG_CURRENT_DESKTOP` token matching a known DE wins. Cached on
+    // first call since session DE doesn't change after process startup.
+    static const Desktop result = []() {
+        const QByteArray xdg = qgetenv("XDG_CURRENT_DESKTOP");
+        if (xdg.isEmpty()) return Desktop::Unknown;
+        const QString lower = QString::fromLocal8Bit(xdg).toLower();
+        const auto tokens = lower.split(QLatin1Char(':'), Qt::SkipEmptyParts);
+        for (const auto& t : tokens) {
+            if (t.trimmed() == QLatin1String("kde")) return Desktop::Kde;
+        }
+        return Desktop::Unknown;
+    }();
+    return result;
+}
+
 // --- BBCode → Qt StyledText HTML subset --------------------------------
 //
 // All regexes are static QRegularExpression so they compile once. PCRE
