@@ -383,6 +383,51 @@ fn align_from_pb(v: i32) -> Option<crate::display::layout::Align> {
     }
 }
 
+fn autopause_mode_to_pb(m: crate::settings::AutopauseMode) -> pb::AutopauseMode {
+    use crate::settings::AutopauseMode as M;
+    match m {
+        M::Never => pb::AutopauseMode::Never,
+        M::Any => pb::AutopauseMode::Any,
+        M::Max => pb::AutopauseMode::Max,
+        M::Focus => pb::AutopauseMode::Focus,
+        M::FocusOrMax => pb::AutopauseMode::FocusOrMax,
+        M::FullScreen => pb::AutopauseMode::FullScreen,
+    }
+}
+
+fn autopause_mode_from_pb(v: i32) -> crate::settings::AutopauseMode {
+    use crate::settings::AutopauseMode as M;
+    match pb::AutopauseMode::try_from(v).unwrap_or(pb::AutopauseMode::Never) {
+        pb::AutopauseMode::Never => M::Never,
+        pb::AutopauseMode::Any => M::Any,
+        pb::AutopauseMode::Max => M::Max,
+        pb::AutopauseMode::Focus => M::Focus,
+        pb::AutopauseMode::FocusOrMax => M::FocusOrMax,
+        pb::AutopauseMode::FullScreen => M::FullScreen,
+    }
+}
+
+fn global_to_pb(g: &crate::settings::GlobalSettings) -> pb::GlobalSettings {
+    let (wallpaper_filters, wallpaper_filter_logics) = g.wallpaper_filter.clone().to_pb();
+    let wallpaper_sorts = WallpaperSortRuleState::vec_to_pb(&g.wallpaper_sorts);
+    pb::GlobalSettings {
+        wallpaper_filters,
+        wallpaper_filter_logics,
+        wallpaper_sorts,
+        layout_defaults: Some(pb::LayoutPrefs {
+            fillmode: fillmode_to_pb(g.layout.fillmode) as i32,
+            align: align_to_pb(g.layout.align) as i32,
+            rotation: rotation_to_pb(g.layout.rotation) as i32,
+        }),
+        autopause: Some(pb::AutopauseSettings {
+            mode: autopause_mode_to_pb(g.autopause.mode) as i32,
+            resume_ms: g.autopause.resume_ms,
+        }),
+        queue_mode: g.queue_mode.clone(),
+        rotation_secs: g.rotation_secs,
+    }
+}
+
 fn displays_replace_event(snap: Vec<DisplaySnapshot>, settings: &SettingsStore) -> pb::Event {
     pb::Event {
         payload: Some(pb::event::Payload::DisplaySnapshot(pb::DisplaySnapshot {
@@ -547,22 +592,9 @@ fn global_event_to_pb(e: &GlobalEvent, state: &Arc<AppState>) -> Option<pb::Even
         }),
         GlobalEvent::SettingsChanged => {
             let snap = state.settings.snapshot();
-            let filter_state = snap.global.wallpaper_filter.clone();
-            let (wallpaper_filters, wallpaper_filter_logics) = filter_state.to_pb();
-            let wallpaper_sorts = WallpaperSortRuleState::vec_to_pb(&snap.global.wallpaper_sorts);
-            let layout_defaults = pb::LayoutPrefs {
-                fillmode: fillmode_to_pb(snap.global.layout.fillmode) as i32,
-                align: align_to_pb(snap.global.layout.align) as i32,
-                rotation: rotation_to_pb(snap.global.layout.rotation) as i32,
-            };
             Some(pb::Event {
                 payload: Some(pb::event::Payload::SettingsChanged(pb::SettingsChanged {
-                    global: Some(pb::GlobalSettings {
-                        wallpaper_filters,
-                        wallpaper_filter_logics,
-                        wallpaper_sorts,
-                        layout_defaults: Some(layout_defaults),
-                    }),
+                    global: Some(global_to_pb(&snap.global)),
                     plugins: snap
                         .plugins
                         .into_iter()
@@ -772,13 +804,40 @@ async fn dispatch_inner(
                 snap.list_by_type(&r.wp_type)
             };
 
-            let matched_keys = if r.filters.is_empty() {
+            // Inject the free-text search as an extra filter rule
+            // placed in its own group. `build_grouped_condition` AND-s
+            // any group not referenced by a `FilterLogic` into the
+            // outer condition, so a fresh group id with no matching
+            // logic edges combines via AND with whatever the user-built
+            // rules already say.
+            let mut filters_with_search = r.filters.clone();
+            let search_text = r.search_text.trim();
+            if ! search_text.is_empty() {
+                let next_group = filters_with_search
+                    .iter()
+                    .map(|f| f.group)
+                    .max()
+                    .map(|g| g + 1)
+                    .unwrap_or(0);
+                filters_with_search.push(pb::WallpaperFilterRule {
+                    r#type: pb::WallpaperFilterType::Name as i32,
+                    group: next_group,
+                    payload: Some(pb::wallpaper_filter_rule::Payload::StringFilter(
+                        pb::WallpaperStringFilter {
+                            value: search_text.to_owned(),
+                            condition: pb::StringCondition::Contains as i32,
+                        },
+                    )),
+                });
+            }
+
+            let matched_keys = if filters_with_search.is_empty() {
                 None
             } else {
                 Some(
                     repo::list_item_keys_by_wallpaper_filters(
                         &state.db,
-                        &r.filters,
+                        &filters_with_search,
                         &r.filter_logics,
                     )
                     .await?
@@ -1271,21 +1330,8 @@ async fn dispatch_inner(
 
         Req::SettingsGet(_) => {
             let snap = state.settings.snapshot();
-            let filter_state = snap.global.wallpaper_filter.clone();
-            let (wallpaper_filters, wallpaper_filter_logics) = filter_state.to_pb();
-            let wallpaper_sorts = WallpaperSortRuleState::vec_to_pb(&snap.global.wallpaper_sorts);
-            let layout_defaults = pb::LayoutPrefs {
-                fillmode: fillmode_to_pb(snap.global.layout.fillmode) as i32,
-                align: align_to_pb(snap.global.layout.align) as i32,
-                rotation: rotation_to_pb(snap.global.layout.rotation) as i32,
-            };
             Res::SettingsGet(pb::SettingsGetResponse {
-                global: Some(pb::GlobalSettings {
-                    wallpaper_filters,
-                    wallpaper_filter_logics,
-                    wallpaper_sorts,
-                    layout_defaults: Some(layout_defaults),
-                }),
+                global: Some(global_to_pb(&snap.global)),
                 plugins: snap
                     .plugins
                     .into_iter()
@@ -1342,6 +1388,8 @@ async fn dispatch_inner(
             // Snapshot pre-mutation layout defaults so we know whether
             // to re-sync display set_configs after the write.
             let prev_layout = state.settings.snapshot().global.layout.clone();
+            let prev_queue_mode = state.settings.snapshot().global.queue_mode.clone();
+            let prev_rotation_secs = state.settings.snapshot().global.rotation_secs;
             state.settings.update(|s| {
                 if let Some(g) = r.global.as_ref() {
                     s.global.wallpaper_filter = WallpaperFilterState::from_pb(
@@ -1361,6 +1409,14 @@ async fn dispatch_inner(
                             s.global.layout.rotation = rt;
                         }
                     }
+                    if let Some(ap) = g.autopause.as_ref() {
+                        s.global.autopause.mode = autopause_mode_from_pb(ap.mode);
+                        s.global.autopause.resume_ms = ap.resume_ms;
+                    }
+                    if !g.queue_mode.is_empty() {
+                        s.global.queue_mode = g.queue_mode.clone();
+                    }
+                    s.global.rotation_secs = g.rotation_secs;
                 }
                 s.plugins = new_plugins.clone();
             });
@@ -1382,6 +1438,19 @@ async fn dispatch_inner(
                 // effective_layout values.
                 let snap = state.router.snapshot_displays().await;
                 state.router.emit_displays_replace_for_settings_change(snap);
+            }
+            // Hot-apply queue mode + rotation interval. Autopause has no
+            // hot-apply step — `router::resolved_autopause` re-reads
+            // settings on every window-state event.
+            let new_queue_mode = state.settings.snapshot().global.queue_mode.clone();
+            if new_queue_mode != prev_queue_mode {
+                if let Some(m) = queue::state::Mode::from_str(&new_queue_mode) {
+                    state.queue.lock().await.set_mode(m);
+                }
+            }
+            let new_rotation_secs = state.settings.snapshot().global.rotation_secs;
+            if new_rotation_secs != prev_rotation_secs {
+                state.rotation.set_interval(new_rotation_secs);
             }
             // Step 4: live renderer hot-reload.
             // For each plugin that actually changed, walk live

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 set(APP_ID org.waywallen.waywallen)
 set(APP_NAME "waywallen-ui")
-set(APP_VERSION "0.1.4")
+set(APP_VERSION "0.1.5")
 set(APP_SUMMARY "Wallpaper manager for Wayland")
 set(APP_AUTHOR "hypengw")
 
@@ -131,6 +131,7 @@ set(QML_FILES
   qml/component/PagePopup.qml
   qml/component/GpuTag.qml
   qml/component/ThumbnailImage.qml
+  qml/component/SearchChip.qml
   qml/component/filter/StringFilter.qml
   qml/component/filter/IntFilter.qml
   qml/component/filter/WpTypeFilter.qml
@@ -143,6 +144,7 @@ set(QML_FILES
   qml/page/WallpaperPage.qml
   qml/page/WallpaperCard.qml
   qml/page/StatusPage.qml
+  qml/page/SettingsPage.qml
   qml/page/DisplaysPage.qml
   qml/page/SourceManagePage.qml
   qml/page/AddLibraryPage.qml

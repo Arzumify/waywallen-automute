@@ -270,12 +270,6 @@ MD.Page {
                     Layout.topMargin: 12
                     spacing: 8
 
-                    MD.Text {
-                        text: "Wallpapers"
-                        typescale: MD.Token.typescale.title_large
-                        color: MD.Token.color.on_surface
-                    }
-
                     MD.EmbedChip {
                         id: sortChip
                         text: root.sortOptions[root.sortIndex].name
@@ -303,6 +297,18 @@ MD.Page {
                                 }
                             }
                         }
+                    }
+
+                    // Free-text search → wallpaperQuery.searchText.
+                    // SearchChip debounces internally so this fires
+                    // ~200ms after the user stops typing. Daemon-side
+                    // the value becomes an extra `name CONTAINS`
+                    // filter rule in its own group.
+                    W.SearchChip {
+                        id: m_search_field
+                        Layout.preferredWidth: 120
+                        placeholderText: qsTr("Search")
+                        onTextEdited: wallpaperQuery.searchText = text
                     }
 
                     MD.ActionToolBar {

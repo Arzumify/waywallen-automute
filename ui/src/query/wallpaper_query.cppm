@@ -24,6 +24,7 @@ export class WallpaperListQuery : public QueryList,
                    setFilterLogics NOTIFY filterLogicsChanged FINAL)
     Q_PROPERTY(QList<waywallen::control::v1::WallpaperSortRule> sorts READ sorts WRITE
                    setSorts NOTIFY sortsChanged FINAL)
+    Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged FINAL)
     Q_PROPERTY(bool hasActiveFilters READ hasActiveFilters NOTIFY filtersChanged FINAL)
     Q_PROPERTY(qint32 total READ total NOTIFY totalChanged FINAL)
 
@@ -44,6 +45,9 @@ public:
     auto sorts() const -> const QList<control::v1::WallpaperSortRule>&;
     void setSorts(const QList<control::v1::WallpaperSortRule>&);
 
+    auto searchText() const -> const QString&;
+    void setSearchText(const QString&);
+
     auto hasActiveFilters() const -> bool;
 
     auto total() const -> qint32;
@@ -56,6 +60,7 @@ public:
     Q_SIGNAL void filtersChanged();
     Q_SIGNAL void filterLogicsChanged();
     Q_SIGNAL void sortsChanged();
+    Q_SIGNAL void searchTextChanged();
     Q_SIGNAL void totalChanged();
 
 private:
@@ -63,6 +68,7 @@ private:
     QList<control::v1::WallpaperFilterRule>   m_filters;
     QList<control::v1::FilterLogic>           m_filter_logics;
     QList<control::v1::WallpaperSortRule>     m_sorts;
+    QString                                   m_search_text;
     qint32                                    m_total { 0 };
 };
 

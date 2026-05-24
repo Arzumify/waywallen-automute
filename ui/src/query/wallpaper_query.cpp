@@ -27,6 +27,7 @@ WallpaperListQuery::WallpaperListQuery(QObject* parent): QueryList(parent) {
     connect_requet_reload(&WallpaperListQuery::wpTypeChanged, this);
     connect_requet_reload(&WallpaperListQuery::filterStateChanged, this);
     connect_requet_reload(&WallpaperListQuery::sortsChanged, this);
+    connect_requet_reload(&WallpaperListQuery::searchTextChanged, this);
 }
 
 auto WallpaperListQuery::wpType() const -> const QString& { return m_wp_type; }
@@ -89,6 +90,15 @@ void WallpaperListQuery::setSorts(const QList<control::v1::WallpaperSortRule>& v
     Q_EMIT sortsChanged();
 }
 
+auto WallpaperListQuery::searchText() const -> const QString& { return m_search_text; }
+
+void WallpaperListQuery::setSearchText(const QString& v) {
+    if (m_search_text == v) return;
+    m_search_text = v;
+    setOffset(0);
+    Q_EMIT searchTextChanged();
+}
+
 auto WallpaperListQuery::hasActiveFilters() const -> bool {
     return !m_filters.isEmpty();
 }
@@ -107,6 +117,7 @@ void WallpaperListQuery::reload() {
     inner.setFilters(m_filters);
     inner.setFilterLogics(m_filter_logics);
     inner.setSorts(m_sorts);
+    inner.setSearchText(m_search_text);
     initReqForReload(inner);
     req.setWallpaperList(std::move(inner));
 
@@ -151,6 +162,7 @@ void WallpaperListQuery::fetchMore(qint32) {
     inner.setFilters(m_filters);
     inner.setFilterLogics(m_filter_logics);
     inner.setSorts(m_sorts);
+    inner.setSearchText(m_search_text);
     initReqForFetchMore(inner);
     req.setWallpaperList(std::move(inner));
 

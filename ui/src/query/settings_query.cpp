@@ -32,6 +32,20 @@ auto map_to_layout(const QVariantMap& m) -> proto::LayoutPrefs {
     return l;
 }
 
+auto autopause_to_map(const proto::AutopauseSettings& a) -> QVariantMap {
+    QVariantMap m;
+    m[u"mode"_s]     = static_cast<int>(a.mode());
+    m[u"resumeMs"_s] = a.resumeMs();
+    return m;
+}
+
+auto map_to_autopause(const QVariantMap& m) -> proto::AutopauseSettings {
+    proto::AutopauseSettings a;
+    a.setMode(static_cast<proto::AutopauseMode>(m.value(u"mode"_s).toInt()));
+    a.setResumeMs(m.value(u"resumeMs"_s).toUInt());
+    return a;
+}
+
 auto global_to_map(const proto::GlobalSettings& g) -> QVariantMap {
     QVariantMap m;
     QVariantList wallpaper_filters;
@@ -52,6 +66,11 @@ auto global_to_map(const proto::GlobalSettings& g) -> QVariantMap {
     if (g.hasLayoutDefaults()) {
         m[u"layoutDefaults"_s] = layout_to_map(g.layoutDefaults());
     }
+    if (g.hasAutopause()) {
+        m[u"autopause"_s] = autopause_to_map(g.autopause());
+    }
+    m[u"queueMode"_s]    = g.queueMode();
+    m[u"rotationSecs"_s] = g.rotationSecs();
     return m;
 }
 
@@ -90,6 +109,15 @@ auto map_to_global(const QVariantMap& m) -> proto::GlobalSettings {
     // clear_rgba). UI never edits these — it just forwards them.
     if (m.contains(u"layoutDefaults"_s)) {
         g.setLayoutDefaults(map_to_layout(m.value(u"layoutDefaults"_s).toMap()));
+    }
+    if (m.contains(u"autopause"_s)) {
+        g.setAutopause(map_to_autopause(m.value(u"autopause"_s).toMap()));
+    }
+    if (m.contains(u"queueMode"_s)) {
+        g.setQueueMode(m.value(u"queueMode"_s).toString());
+    }
+    if (m.contains(u"rotationSecs"_s)) {
+        g.setRotationSecs(m.value(u"rotationSecs"_s).toUInt());
     }
     return g;
 }

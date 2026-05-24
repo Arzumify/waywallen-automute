@@ -90,6 +90,8 @@ using proto::LayoutPrefs;
 using proto::FillModeGadget::FillMode;
 using proto::AlignGadget::Align;
 using proto::RotationGadget::Rotation;
+using proto::AutopauseSettings;
+using proto::AutopauseModeGadget::AutopauseMode;
 
 using proto::WallpaperFilterRule;
 using proto::WallpaperFilterTypeGadget::WallpaperFilterType;

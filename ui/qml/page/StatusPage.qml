@@ -149,8 +149,23 @@ MD.Page {
                 contentItem: ColumnLayout {
                     spacing: 8
 
-                    SectionTitle {
-                        text: "Daemon"
+                    RowLayout {
+                        spacing: 8
+                        SectionTitle {
+                            text: "Daemon"
+                            Layout.fillWidth: true
+                        }
+                        MD.IconButton {
+                            icon.name: MD.Token.icon.settings
+                            onClicked: MD.Util.showPopup('waywallen.ui/PagePopup', {
+                                source: 'waywallen.ui/SettingsPage'
+                            }, root)
+
+                            MD.ToolTip {
+                                visible: parent.hovered
+                                text: "Settings"
+                            }
+                        }
                     }
 
                     RowLayout {
