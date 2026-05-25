@@ -390,6 +390,45 @@ void WallpaperApplyQuery::reload() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// WallpaperApplyViaPortalQuery
+// ---------------------------------------------------------------------------
+
+WallpaperApplyViaPortalQuery::WallpaperApplyViaPortalQuery(QObject* parent): Query(parent) {}
+
+auto WallpaperApplyViaPortalQuery::wallpaperId() const -> const QString& { return m_wallpaper_id; }
+void WallpaperApplyViaPortalQuery::setWallpaperId(const QString& v) {
+    if (m_wallpaper_id != v) {
+        m_wallpaper_id = v;
+        Q_EMIT wallpaperIdChanged();
+    }
+}
+
+auto WallpaperApplyViaPortalQuery::uri() const -> const QString& { return m_uri; }
+
+void WallpaperApplyViaPortalQuery::reload() {
+    if (m_wallpaper_id.isEmpty()) return;
+    setStatus(Status::Querying);
+    auto backend = App::instance()->backend();
+
+    auto req   = proto::Request {};
+    auto inner = proto::WallpaperApplyViaPortalRequest {};
+    inner.setWallpaperId(m_wallpaper_id);
+    req.setWallpaperApplyViaPortal(std::move(inner));
+
+    auto self = QWatcher { this };
+    spawn([self, backend, req = std::move(req)]() mutable -> task<void> {
+        auto result = co_await backend->send(std::move(req));
+        co_await asio::post(asio::bind_executor(self->get_executor(), use_task));
+        if (! self) co_return;
+        self->inspect_set(result, [self](const proto::Response& rsp) {
+            self->m_uri = rsp.wallpaperApplyViaPortal().uri();
+            Q_EMIT self->uriChanged();
+        });
+        co_return;
+    });
+}
+
 } // namespace waywallen
 
 #include "waywallen/query/wallpaper_query.moc.cpp"

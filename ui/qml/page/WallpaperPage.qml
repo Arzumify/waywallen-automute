@@ -64,6 +64,60 @@ MD.Page {
         }
     }
 
+    // Independent of applyQuery: hands the image URI to the DE's
+    // xdg-desktop-portal Wallpaper backend. Image-only; engaged only
+    // when displays.length == 0 (no daemon display surface available).
+    W.WallpaperApplyViaPortalQuery {
+        id: portalApplyQuery
+    }
+    Connections {
+        target: portalApplyQuery
+        function onStatusChanged() {
+            // QAsyncResult::Status — 2=Finished, 3=Error.
+            if (portalApplyQuery.status === 3)
+                W.Action.toast("Portal apply failed");
+            else if (portalApplyQuery.status === 2)
+                W.Action.toast("Wallpaper sent to desktop portal");
+        }
+    }
+
+    MD.Action {
+        id: applyAction
+        text: "Apply"
+        busy: applyQuery.querying
+        enabled: (W.App.displayManager.displays || []).length > 0
+        onTriggered: {
+            if (busy) return;
+            if (!root.selectedWallpaper) return;
+            applyQuery.wallpaper = root.selectedWallpaper;
+            applyQuery.displayIds = root.applyTargetIds;
+            if (root.rendererCandidates.length >= 2) {
+                const pick = root.rendererCandidates[root.rendererIndex];
+                applyQuery.rendererName = pick ? (pick.name || "") : "";
+            } else {
+                applyQuery.rendererName = "";
+            }
+            applyQuery.reload();
+        }
+    }
+
+    MD.Action {
+        id: applyViaPortalAction
+        text: "Apply via desktop portal"
+        busy: portalApplyQuery.querying
+        onTriggered: {
+            if (busy) return;
+            if (!root.selectedWallpaper) return;
+            portalApplyQuery.wallpaperId = root.selectedWallpaper.id_proto;
+            portalApplyQuery.reload();
+        }
+    }
+
+    readonly property MD.Action activeApplyAction:
+        ((root.selectedWallpaper?.wpType ?? "") === "image"
+            && (W.App.displayManager.displays || []).length === 0)
+        ? applyViaPortalAction : applyAction
+
     // Detail panel uses this to fetch the freshest view (tags + media
     // meta) for the currently-selected entry. Reload is auto-triggered
     // when wallpaperId changes.
@@ -974,37 +1028,20 @@ MD.Page {
                         }
                     }
 
-                    // Apply button — disabled when no display is
-                    // registered (daemon would reject the call with
-                    // FailedPrecondition anyway).
+                    // Apply button — backed by either applyAction (the
+                    // renderer/router path) or applyViaPortalAction (the
+                    // xdg-desktop-portal fallback for image wallpapers
+                    // when no display is registered). The active action
+                    // owns text + busy + enabled + onTriggered.
                     MD.BusyButton {
                         id: applyBtn
                         Layout.fillWidth: true
-                        text: "Apply"
-                        busy: applyQuery.querying
+                        action: root.activeApplyAction
                         mdState.type: MD.Enum.BtFilled
-                        enabled: (W.App.displayManager.displays || []).length > 0
 
                         MD.ToolTip {
                             visible: applyBtn.hovered && !applyBtn.enabled
                             text: "No display connected"
-                        }
-
-                        onClicked: {
-                            if (busy)
-                                return;
-
-                            if (!root.selectedWallpaper)
-                                return;
-                            applyQuery.wallpaper = root.selectedWallpaper;
-                            applyQuery.displayIds = root.applyTargetIds;
-                            if (root.rendererCandidates.length >= 2) {
-                                const pick = root.rendererCandidates[root.rendererIndex];
-                                applyQuery.rendererName = pick ? (pick.name || "") : "";
-                            } else {
-                                applyQuery.rendererName = "";
-                            }
-                            applyQuery.reload();
                         }
                     }
 

@@ -125,6 +125,17 @@ impl Daemon1 {
             .map_err(zbus::fdo::Error::from)
     }
 
+    /// Apply an image wallpaper via `org.freedesktop.portal.Wallpaper`
+    /// instead of the renderer/router/display path. Returns the
+    /// `file://` URI that was forwarded to the portal. Non-image
+    /// wallpapers fail with `InvalidArgs`.
+    async fn apply_via_portal(&self, id: String) -> zbus::fdo::Result<String> {
+        control::apply_wallpaper_via_portal(&self.app, &id)
+            .await
+            .map(|r| r.uri)
+            .map_err(zbus::fdo::Error::from)
+    }
+
     /// Toggle shuffle on the active playlist. Persisted to settings so
     /// it survives restart.
     async fn set_shuffle(&self, on: bool) {

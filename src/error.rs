@@ -137,6 +137,17 @@ pub enum Error {
     #[error("source_plugin '{plugin}'.extras() failed: {message}")]
     SourceExtrasFailed { plugin: String, message: String },
 
+    /// Caller asked an apply path to handle a wallpaper whose `wp_type`
+    /// the path cannot serve (e.g. the xdp portal fallback only accepts
+    /// images).
+    #[error("wallpaper type '{0}' not supported by this apply path")]
+    WallpaperTypeNotSupported(String),
+
+    /// `org.freedesktop.portal.Desktop` Wallpaper call failed (bus
+    /// unavailable, no portal backend, user cancelled the request).
+    #[error("portal call failed: {0}")]
+    PortalCallFailed(String),
+
     /// `coerce_and_validate` rejected a `SettingsSet` value.
     #[error("settings validation failed: {0}")]
     SettingsValidationFailed(String),
@@ -224,6 +235,8 @@ impl Error {
             Self::RendererControlFailed(_) => E::RendererControlFailed,
             Self::SourcePluginNotFound(_) => E::SourcePluginNotFound,
             Self::SourceExtrasFailed { .. } => E::SourceExtrasFailed,
+            Self::WallpaperTypeNotSupported(_) => E::WallpaperTypeNotSupported,
+            Self::PortalCallFailed(_) => E::PortalCallFailed,
             Self::SettingsValidationFailed(_) => E::SettingsValidationFailed,
             Self::SettingsApplyFailed(_) => E::SettingsApplyFailed,
             Self::LibraryNotFound(_) => E::LibraryNotFound,
@@ -246,6 +259,7 @@ impl Error {
             | E::RendererTypeMismatch
             | E::NoRendererForType
             | E::SettingsValidationFailed
+            | E::WallpaperTypeNotSupported
             | E::PlaylistInvalid => S::InvalidArgument,
             E::FailedPrecondition | E::NoDisplayRegistered => S::FailedPrecondition,
             E::WallpaperNotFound
@@ -258,7 +272,8 @@ impl Error {
             | E::RendererSpawnFailed
             | E::RendererControlFailed
             | E::SourceExtrasFailed
-            | E::SettingsApplyFailed => S::Internal,
+            | E::SettingsApplyFailed
+            | E::PortalCallFailed => S::Internal,
         }
     }
 
@@ -300,6 +315,7 @@ impl From<Error> for zbus::fdo::Error {
             | E::RendererTypeMismatch
             | E::NoRendererForType
             | E::SettingsValidationFailed
+            | E::WallpaperTypeNotSupported
             | E::PlaylistInvalid => zbus::fdo::Error::InvalidArgs(msg),
             // FailedPrecondition / NoDisplayRegistered / Internal-class
             // / Db / Spawn / Control / Extras / SettingsApply — no

@@ -84,6 +84,128 @@ async fn apply_wallpaper_inner(app: &Arc<AppState>, id: &str) -> Result<ApplyRes
     apply_wallpaper_core(app, id, None).await
 }
 
+pub struct PortalApplyResult {
+    pub wallpaper_id: String,
+    pub uri: String,
+}
+
+/// Apply an image wallpaper via `org.freedesktop.portal.Wallpaper`.
+/// Independent of the renderer/router/display path: hands the URI to
+/// the DE's portal backend and lets it own the actual rendering.
+/// Image-only by design; non-image `wp_type` returns
+/// `WallpaperTypeNotSupported`. Single-flight under `apply/portal`.
+pub async fn apply_wallpaper_via_portal(
+    app: &Arc<AppState>,
+    id: &str,
+) -> Result<PortalApplyResult> {
+    let app_clone = app.clone();
+    let id_owned = id.to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<PortalApplyResult>>();
+    app.tasks.spawn_async_unique(
+        crate::tasks::TaskKind::Apply,
+        "apply/portal",
+        format!("apply-portal/{id_owned}"),
+        async move {
+            let res = apply_via_portal_inner(&app_clone, &id_owned).await;
+            let _ = tx.send(res);
+            Ok(())
+        },
+    );
+    rx.await
+        .map_err(|_| Error::Internal(anyhow!("apply task superseded or cancelled")))?
+}
+
+async fn apply_via_portal_inner(app: &Arc<AppState>, id: &str) -> Result<PortalApplyResult> {
+    let entry = {
+        let snap = app.source_snapshot.read().await;
+        snap.get(id).cloned()
+    };
+    let entry = entry.ok_or_else(|| Error::WallpaperNotFound(id.to_string()))?;
+
+    if !entry.wp_type.eq_ignore_ascii_case("image") {
+        return Err(Error::WallpaperTypeNotSupported(entry.wp_type.clone()));
+    }
+    if !entry.resource.starts_with('/') {
+        return Err(Error::InvalidArgument(format!(
+            "portal apply: resource must be an absolute path, got '{}'",
+            entry.resource
+        )));
+    }
+    let uri = file_uri_from_abs_path(&entry.resource);
+
+    let conn = zbus::Connection::session()
+        .await
+        .map_err(|e| Error::PortalCallFailed(format!("session bus: {e}")))?;
+
+    let mut options: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
+        std::collections::HashMap::new();
+    options.insert("set-on", zbus::zvariant::Value::from("background"));
+    options.insert("show-preview", zbus::zvariant::Value::from(false));
+
+    // Fire-and-ack: the portal returns an ObjectPath for the Request
+    // object as the synchronous reply. The actual user-visible result
+    // arrives asynchronously via a Response signal on that path; we
+    // don't wait for it — the DE owns the user prompt and final apply.
+    let parent_window: &str = "";
+    let _request_path: zbus::zvariant::OwnedObjectPath = conn
+        .call_method(
+            Some("org.freedesktop.portal.Desktop"),
+            "/org/freedesktop/portal/desktop",
+            Some("org.freedesktop.portal.Wallpaper"),
+            "SetWallpaperURI",
+            &(parent_window, &uri, options),
+        )
+        .await
+        .map_err(|e| Error::PortalCallFailed(format!("SetWallpaperURI: {e}")))?
+        .body()
+        .deserialize()
+        .map_err(|e| Error::PortalCallFailed(format!("reply decode: {e}")))?;
+
+    Ok(PortalApplyResult {
+        wallpaper_id: entry.id,
+        uri,
+    })
+}
+
+/// Build `file://<percent-encoded path>` from a local absolute path.
+/// RFC 3986 unreserved + the path-safe sub-delims/`:`/`@`/`/` are left
+/// literal; everything else (including non-ASCII bytes and `%`) gets
+/// `%HH`-encoded.
+fn file_uri_from_abs_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len() + 7);
+    out.push_str("file://");
+    for b in path.bytes() {
+        match b {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b'/'
+            | b':'
+            | b'@'
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'=' => out.push(b as char),
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
+}
+
 /// Shared core for both the global apply path (target=None → all
 /// currently-registered displays get re-pointed) and the per-display
 /// path (target=Some(ids) → only those displays). Spawns / reuses the

@@ -196,4 +196,34 @@ private:
     QString          m_renderer_id;
 };
 
+/// Apply via `org.freedesktop.portal.Wallpaper` — image-only, no
+/// renderer / router / display surface involvement. Independent of
+/// `WallpaperApplyQuery`; the daemon enforces wp_type == "image".
+export class WallpaperApplyViaPortalQuery
+    : public Query,
+      public QueryExtra<control::v1::Response, WallpaperApplyViaPortalQuery> {
+    Q_OBJECT
+    QML_ELEMENT
+
+    Q_PROPERTY(QString wallpaperId READ wallpaperId WRITE setWallpaperId NOTIFY wallpaperIdChanged FINAL)
+    Q_PROPERTY(QString uri READ uri NOTIFY uriChanged FINAL)
+
+public:
+    WallpaperApplyViaPortalQuery(QObject* parent = nullptr);
+
+    auto wallpaperId() const -> const QString&;
+    void setWallpaperId(const QString&);
+
+    auto uri() const -> const QString&;
+
+    void reload() override;
+
+    Q_SIGNAL void wallpaperIdChanged();
+    Q_SIGNAL void uriChanged();
+
+private:
+    QString m_wallpaper_id;
+    QString m_uri;
+};
+
 } // namespace waywallen

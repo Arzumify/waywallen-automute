@@ -61,6 +61,7 @@ message Request {
     GpuListRequest            gpu_list = 41;
     WallpaperGetRequest       wallpaper_get = 42;
     WallpaperPropertySetRequest wallpaper_property_set = 43;
+    WallpaperApplyViaPortalRequest wallpaper_apply_via_portal = 44;
   }
 }
 
@@ -109,6 +110,7 @@ message Response {
     GpuListResponse            gpu_list = 41;
     WallpaperGetResponse       wallpaper_get = 42;
     WallpaperPropertySetResponse wallpaper_property_set = 43;
+    WallpaperApplyViaPortalResponse wallpaper_apply_via_portal = 44;
   }
 }
 
@@ -149,6 +151,8 @@ enum ErrorCode {
   ERROR_CODE_NO_DISPLAY_REGISTERED = 201;
   ERROR_CODE_SOURCE_PLUGIN_NOT_FOUND = 202;
   ERROR_CODE_SOURCE_EXTRAS_FAILED = 203;
+  ERROR_CODE_WALLPAPER_TYPE_NOT_SUPPORTED = 204;
+  ERROR_CODE_PORTAL_CALL_FAILED = 205;
 
   // Settings
   ERROR_CODE_SETTINGS_VALIDATION_FAILED = 300;
@@ -402,6 +406,21 @@ message WallpaperApplyResponse {
   string wallpaper_id = 2;
   string wp_type = 3;
   string name = 4;
+}
+
+// Apply a wallpaper via the org.freedesktop.portal.Wallpaper portal —
+// an independent code path that does not touch the renderer / router /
+// display surface. Image-only by design; the DE's portal backend owns
+// the actual rendering. Intended as a fallback for environments where
+// the daemon has no display (e.g. plain X11 desktops, or before a
+// `waywallen-display` consumer has connected). Single-flight under the
+// `apply/portal` key.
+message WallpaperApplyViaPortalRequest {
+  string wallpaper_id = 1;
+}
+message WallpaperApplyViaPortalResponse {
+  string wallpaper_id = 1;
+  string uri = 2;
 }
 
 // ---------------------------------------------------------------------------

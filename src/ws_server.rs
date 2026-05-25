@@ -1328,6 +1328,14 @@ async fn dispatch_inner(
             })
         }
 
+        Req::WallpaperApplyViaPortal(r) => {
+            let res = crate::control::apply_wallpaper_via_portal(state, &r.wallpaper_id).await?;
+            Res::WallpaperApplyViaPortal(pb::WallpaperApplyViaPortalResponse {
+                wallpaper_id: res.wallpaper_id,
+                uri: res.uri,
+            })
+        }
+
         Req::SettingsGet(_) => {
             let snap = state.settings.snapshot();
             Res::SettingsGet(pb::SettingsGetResponse {
