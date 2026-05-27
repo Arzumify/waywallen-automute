@@ -584,7 +584,7 @@ int main(int argc, char** argv) {
               hwdec_label(hwaccel), kind_label(decoder->kind()));
 
     /* --- Audio: open same file via PosixFile, attach AvPlayer.
-     *   Failure (missing audio stream, unsupported codec, no cubeb device)
+     *   Failure (missing audio stream, unsupported codec, no audio device)
      *   is non-fatal: log and continue without audio (presenter falls
      *   back to wall-clock pacing). */
     std::unique_ptr<wavsen::audio::AvPlayer> av_player;

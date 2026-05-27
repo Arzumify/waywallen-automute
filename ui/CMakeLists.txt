@@ -33,12 +33,6 @@ if("${QT_INSTALL_QML}" STREQUAL "")
 endif()
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-# cubeb
-set(BUILD_TESTS OFF)
-set(BUILD_TOOLS OFF)
-set(BUNDLE_SPEEX ON)
-set(USE_SANITIZERS OFF)
-set(USE_WINMM OFF)
 include(${CMAKE_SOURCE_DIR}/cmake/FetchDeps.cmake)
 fetchdeps(${CMAKE_SOURCE_DIR}/deps.json)
 
