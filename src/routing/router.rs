@@ -497,9 +497,7 @@ impl Router {
         clear: bool,
     ) {
         let Some(settings) = self.settings.get().cloned() else {
-            log::warn!(
-                "router: set_display_alias({display_name}) called before settings attached"
-            );
+            log::warn!("router: set_display_alias({display_name}) called before settings attached");
             return;
         };
         let target_id = self.find_display_by_name(&display_name).await;

@@ -801,7 +801,11 @@ async fn dispatch_inner(
         Req::WallpaperList(r) => {
             log::info!(
                 "WallpaperList: page={} page_size={} wp_type={:?} filters={} search={:?}",
-                r.page, r.page_size, r.wp_type, r.filters.len(), r.search_text
+                r.page,
+                r.page_size,
+                r.wp_type,
+                r.filters.len(),
+                r.search_text
             );
             // Read from the snapshot mirror (see `source_snapshot.rs`)
             // so an in-flight scan does not block this query.
@@ -883,9 +887,7 @@ async fn dispatch_inner(
             } else {
                 ((r.page as usize) * page_size, page_size)
             };
-            log::info!(
-                "WallpaperList: total={total} returning offset={offset} take={take}"
-            );
+            log::info!("WallpaperList: total={total} returning offset={offset} take={take}");
 
             let page_entries: Vec<&crate::wallpaper_type::WallpaperEntry> = filtered_entries
                 .into_iter()
