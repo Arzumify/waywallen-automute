@@ -1270,8 +1270,7 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
     let mut transform_dirty: bool = true;
 
     loop {
-        let (evt, mut fds) =
-            codec::recv_event(stream).map_err(|e| anyhow!("recv event: {e}"))?;
+        let (evt, mut fds) = codec::recv_event(stream).map_err(|e| anyhow!("recv event: {e}"))?;
         match evt {
             ProtoEvent::BindBuffers {
                 buffer_generation,
@@ -1416,9 +1415,7 @@ fn run_uds_session(sock: &Path, binding: &OutputBinding) -> Result<()> {
                         }
 
                         if transform_dirty {
-                            binding
-                                .surface
-                                .set_buffer_transform(Transform::Normal);
+                            binding.surface.set_buffer_transform(Transform::Normal);
                             transform_dirty = false;
                         }
 

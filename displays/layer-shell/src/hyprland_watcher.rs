@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use waywallen::display::proto::{codec, Request as ProtoRequest};
 use crate::OutputBinding;
+use waywallen::display::proto::{codec, Request as ProtoRequest};
 use waywallen::routing::autopause::{
     FLAG_ACTIVE, FLAG_FULLSCREEN, FLAG_MAXIMIZED, FLAG_NON_MINIMIZED,
 };
@@ -73,17 +73,9 @@ fn push_state(registry: &BindingRegistry) {
         }
     };
     let by_output = aggregate_flags(&snapshot);
-    let bindings: Vec<Arc<OutputBinding>> = registry
-        .lock()
-        .unwrap()
-        .values()
-        .cloned()
-        .collect();
+    let bindings: Vec<Arc<OutputBinding>> = registry.lock().unwrap().values().cloned().collect();
     for binding in bindings {
-        let flags = by_output
-            .get(binding.display_name())
-            .copied()
-            .unwrap_or(0);
+        let flags = by_output.get(binding.display_name()).copied().unwrap_or(0);
         let prev = binding.window_flags().swap(flags, Ordering::SeqCst);
         if prev == flags {
             continue;
@@ -170,8 +162,11 @@ fn run_hyprctl_json<T: serde::de::DeserializeOwned>(args: &[&str]) -> anyhow::Re
 }
 
 fn aggregate_flags(snap: &Snapshot) -> HashMap<String, u32> {
-    let mon_name: HashMap<i64, String> =
-        snap.monitors.iter().map(|m| (m.id, m.name.clone())).collect();
+    let mon_name: HashMap<i64, String> = snap
+        .monitors
+        .iter()
+        .map(|m| (m.id, m.name.clone()))
+        .collect();
     let active_ws: HashMap<i64, i64> = snap
         .monitors
         .iter()
