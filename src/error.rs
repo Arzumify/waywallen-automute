@@ -137,6 +137,16 @@ pub enum Error {
     #[error("source_plugin '{plugin}'.extras() failed: {message}")]
     SourceExtrasFailed { plugin: String, message: String },
 
+    /// Source plugin does not export the requested discover function
+    /// (`discover` / `details`), so it cannot serve a discover request.
+    #[error("source plugin '{0}' does not support discover")]
+    DiscoverUnsupported(String),
+
+    /// Source plugin's `discover(ctx, params)` / `details(ctx, id)` Lua
+    /// callback raised. The stringified Lua error rides in `message`.
+    #[error("source_plugin '{plugin}'.discover() failed: {message}")]
+    DiscoverFailed { plugin: String, message: String },
+
     /// Caller asked an apply path to handle a wallpaper whose `wp_type`
     /// the path cannot serve (e.g. the xdp portal fallback only accepts
     /// images).
@@ -235,6 +245,10 @@ impl Error {
             Self::RendererControlFailed(_) => E::RendererControlFailed,
             Self::SourcePluginNotFound(_) => E::SourcePluginNotFound,
             Self::SourceExtrasFailed { .. } => E::SourceExtrasFailed,
+            // Discover types map onto generic codes; the discover request
+            // proto (and any dedicated codes) is owned by the transport PR.
+            Self::DiscoverUnsupported(_) => E::FailedPrecondition,
+            Self::DiscoverFailed { .. } => E::Internal,
             Self::WallpaperTypeNotSupported(_) => E::WallpaperTypeNotSupported,
             Self::PortalCallFailed(_) => E::PortalCallFailed,
             Self::SettingsValidationFailed(_) => E::SettingsValidationFailed,

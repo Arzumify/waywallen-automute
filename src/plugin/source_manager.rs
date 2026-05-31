@@ -11,6 +11,9 @@ use crate::model::repo;
 use crate::probe::media::{AvFormatProbe, MediaProbe};
 use crate::wallpaper_type::{WallpaperEntry, WallpaperType};
 
+/// User-Agent the `ctx.http` default client sends.
+const WAYWALLEN_HTTP_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) waywallen";
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -32,6 +35,46 @@ pub struct SourcePluginInfo {
     /// choose. May contain newlines / inline-code Markdown markers
     /// that the UI is free to render literally. Empty when omitted.
     pub library_hint: String,
+}
+
+/// One sort option a discover-capable plugin advertises via
+/// `info().discover.sorts`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiscoverSort {
+    pub key: String,
+    pub label: String,
+}
+
+/// Discover capability of a single source plugin, derived from
+/// `info().discover`. Plugins without that table are not listed.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiscoverSourceInfo {
+    /// Source component name — the routing key clients echo back in
+    /// `DiscoverSearchRequest.plugin_id`.
+    pub plugin_id: String,
+    pub name: String,
+    pub supports_search: bool,
+    pub sorts: Vec<DiscoverSort>,
+    pub tags: Vec<String>,
+}
+
+/// One remote item returned by a plugin's `discover(ctx, params)`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct DiscoverItem {
+    pub id: String,
+    pub title: String,
+    pub preview_url: String,
+    pub author: String,
+    pub extra: HashMap<String, String>,
+}
+
+/// Detail blob returned by a plugin's `details(ctx, id)`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct DiscoverDetails {
+    pub description: String,
+    pub size: String,
+    pub tags: Vec<String>,
+    pub extra: HashMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +516,15 @@ impl SourceManager {
         // resolved renderer manifest in
         // `renderer_registry::validate_metadata`.
 
+        // ctx.http — fluent client: ctx.http:get(url):headers({...}):send();
+        //   builder :header/:headers/:query/:form/:json/:body/:timeout/:send,
+        //   response :status/:ok/:headers/:text/:bytes/:json.
+        // ctx.html — table: query/query_one (-> {tag,text,html,inner_html,attrs}), text.
+        // ctx.url — table: encode/decode/encode_component/host/parse/join.
+        ctx.set("http", mlua_extra::http::default(WAYWALLEN_HTTP_USER_AGENT))?;
+        ctx.set("html", mlua_extra::html::create_module(&self.lua)?)?;
+        ctx.set("url", mlua_extra::url::create_module(&self.lua)?)?;
+
         Ok(ctx)
     }
 
@@ -660,6 +712,136 @@ impl SourceManager {
             }
         }
         Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // Discover API — generic remote browsing relayed into plugin Lua.
+    // -----------------------------------------------------------------------
+
+    /// List the source plugins that opt into discovery (export an
+    /// `info().discover` table) along with their declared sort/tag
+    /// vocabulary. Plugins without the table are skipped.
+    pub fn discover_sources(&self) -> Result<Vec<DiscoverSourceInfo>> {
+        let mut out = Vec::new();
+        for (name, key) in &self.plugins {
+            let module: LuaTable = self.lua.registry_value(key)?;
+            let info_fn: LuaFunction = module.get("info")?;
+            let info: LuaTable = info_fn.call(())?;
+            let Ok(disc) = info.get::<LuaTable>("discover") else {
+                continue;
+            };
+            let supports_search = disc.get::<bool>("supports_search").unwrap_or(false);
+            let sorts = disc
+                .get::<LuaTable>("sorts")
+                .map(|st| {
+                    st.sequence_values::<LuaTable>()
+                        .filter_map(|v| v.ok())
+                        .map(|s| DiscoverSort {
+                            key: s.get("key").unwrap_or_default(),
+                            label: s.get("label").unwrap_or_default(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let tags = disc
+                .get::<LuaTable>("tags")
+                .map(|tt| {
+                    tt.sequence_values::<String>()
+                        .filter_map(|v| v.ok())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let display_name: String = info.get("name").unwrap_or_else(|_| name.clone());
+            out.push(DiscoverSourceInfo {
+                plugin_id: name.clone(),
+                name: display_name,
+                supports_search,
+                sorts,
+                tags,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Relay a discover/search request to a plugin's `discover(ctx, params)`
+    /// Lua function. `params` is `{ query, sort, page, tags }`. The plugin
+    /// returns an array of `{ id, title, preview_url, author, extra }`.
+    pub async fn call_discover(
+        &self,
+        plugin_name: &str,
+        query: &str,
+        sort: &str,
+        page: u32,
+        tags: &[String],
+    ) -> Result<Vec<DiscoverItem>> {
+        let key = self
+            .plugins
+            .get(plugin_name)
+            .ok_or_else(|| Error::SourcePluginNotFound(plugin_name.to_string()))?;
+        let module: LuaTable = self.lua.registry_value(key)?;
+        let discover_fn: LuaFunction = module
+            .get("discover")
+            .map_err(|_| Error::DiscoverUnsupported(plugin_name.to_string()))?;
+
+        let params = self.lua.create_table()?;
+        params.set("query", query)?;
+        params.set("sort", sort)?;
+        params.set("page", page)?;
+        let tags_tbl = self.lua.create_table()?;
+        for (i, t) in tags.iter().enumerate() {
+            tags_tbl.set(i + 1, t.clone())?;
+        }
+        params.set("tags", tags_tbl)?;
+
+        let ctx = self.build_ctx(Some(plugin_name), &[])?;
+        let result: LuaTable =
+            discover_fn
+                .call_async((ctx, params))
+                .await
+                .map_err(|e| Error::DiscoverFailed {
+                    plugin: plugin_name.to_string(),
+                    message: e.to_string(),
+                })?;
+
+        let mut items = Vec::new();
+        for row in result.sequence_values::<LuaTable>().flatten() {
+            items.push(DiscoverItem {
+                id: row.get("id").unwrap_or_default(),
+                title: row.get("title").unwrap_or_default(),
+                preview_url: row.get("preview_url").unwrap_or_default(),
+                author: row.get("author").unwrap_or_default(),
+                extra: parse_lua_string_map(&row, "extra"),
+            });
+        }
+        Ok(items)
+    }
+
+    /// Relay a detail request to a plugin's `details(ctx, id)` Lua function.
+    pub async fn call_details(&self, plugin_name: &str, id: &str) -> Result<DiscoverDetails> {
+        let key = self
+            .plugins
+            .get(plugin_name)
+            .ok_or_else(|| Error::SourcePluginNotFound(plugin_name.to_string()))?;
+        let module: LuaTable = self.lua.registry_value(key)?;
+        let details_fn: LuaFunction = module
+            .get("details")
+            .map_err(|_| Error::DiscoverUnsupported(plugin_name.to_string()))?;
+
+        let ctx = self.build_ctx(Some(plugin_name), &[])?;
+        let result: LuaTable = details_fn
+            .call_async((ctx, id.to_string()))
+            .await
+            .map_err(|e| Error::DiscoverFailed {
+                plugin: plugin_name.to_string(),
+                message: e.to_string(),
+            })?;
+
+        Ok(DiscoverDetails {
+            description: result.get("description").unwrap_or_default(),
+            size: result.get("size").unwrap_or_default(),
+            tags: result.get::<Vec<String>>("tags").unwrap_or_default(),
+            extra: parse_lua_string_map(&result, "extra"),
+        })
     }
 
     pub fn plugins(&self) -> Result<Vec<SourcePluginInfo>> {
