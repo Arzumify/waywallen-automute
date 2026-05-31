@@ -137,6 +137,11 @@ pub enum Error {
     #[error("source_plugin '{plugin}'.extras() failed: {message}")]
     SourceExtrasFailed { plugin: String, message: String },
 
+    /// Installing a plugin `.zip` failed (bad path, unreadable archive,
+    /// unsafe entry, or no `plugin.toml`).
+    #[error("plugin install failed: {0}")]
+    PluginInstallFailed(String),
+
     /// Source plugin does not export the requested discover function
     /// (`discover` / `details`), so it cannot serve a discover request.
     #[error("source plugin '{0}' does not support discover")]
@@ -245,6 +250,7 @@ impl Error {
             Self::RendererControlFailed(_) => E::RendererControlFailed,
             Self::SourcePluginNotFound(_) => E::SourcePluginNotFound,
             Self::SourceExtrasFailed { .. } => E::SourceExtrasFailed,
+            Self::PluginInstallFailed(_) => E::PluginInstallFailed,
             // Discover types map onto generic codes; the discover request
             // proto (and any dedicated codes) is owned by the transport PR.
             Self::DiscoverUnsupported(_) => E::FailedPrecondition,
@@ -286,6 +292,7 @@ impl Error {
             | E::RendererSpawnFailed
             | E::RendererControlFailed
             | E::SourceExtrasFailed
+            | E::PluginInstallFailed
             | E::SettingsApplyFailed
             | E::PortalCallFailed => S::Internal,
         }

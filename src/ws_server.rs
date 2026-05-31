@@ -226,6 +226,28 @@ async fn handle_conn(
 // RouterEvent → pb::Event translation
 // ---------------------------------------------------------------------------
 
+fn renderer_def_to_pb(
+    def: &crate::plugin::renderer_registry::RendererDef,
+) -> pb::RendererPluginInfo {
+    let mut settings: Vec<pb::SettingSchema> = def
+        .settings
+        .iter()
+        .map(|(k, v)| crate::control_proto::setting_def_to_proto(k, v))
+        .collect();
+    // Stable order so UIs can rely on deterministic layout: by manifest
+    // `order` then key name.
+    settings.sort_by(|a, b| a.order.cmp(&b.order).then(a.key.cmp(&b.key)));
+    pb::RendererPluginInfo {
+        name: def.name.clone(),
+        bin: def.bin.to_string_lossy().into_owned(),
+        types: def.types.iter().map(|t| t.to_string()).collect(),
+        priority: def.priority,
+        version: def.version.clone(),
+        settings,
+        plugin_id: def.plugin_id.clone(),
+    }
+}
+
 fn gpu_info_to_pb(g: &crate::gpu::GpuInfo) -> pb::GpuInfo {
     pb::GpuInfo {
         render_node: g
@@ -772,31 +794,39 @@ async fn dispatch_inner(
             let renderers = registry
                 .all_renderers()
                 .iter()
-                .map(|def| {
-                    let mut settings: Vec<pb::SettingSchema> = def
-                        .settings
-                        .iter()
-                        .map(|(k, v)| crate::control_proto::setting_def_to_proto(k, v))
-                        .collect();
-                    // Stable order so UIs can rely on deterministic
-                    // layout: by manifest `order` then key name.
-                    settings.sort_by(|a, b| a.order.cmp(&b.order).then(a.key.cmp(&b.key)));
-                    pb::RendererPluginInfo {
-                        name: def.name.clone(),
-                        bin: def.bin.to_string_lossy().into_owned(),
-                        types: def.types.iter().map(|t| t.to_string()).collect(),
-                        priority: def.priority,
-                        version: def.version.clone(),
-                        settings,
-                        plugin_id: def.plugin_id.clone(),
-                    }
-                })
+                .map(|def| renderer_def_to_pb(def))
                 .collect();
             let supported_types = registry.supported_types().into_iter().cloned().collect();
             Res::RendererPluginList(pb::RendererPluginListResponse {
                 renderers,
                 supported_types,
             })
+        }
+
+        Req::PluginList(_) => {
+            // Plugin-centric view: each installable plugin package with the
+            // renderer components it provides (looked up by plugin_id).
+            let registry = state.renderer_manager.registry();
+            let all = registry.all_renderers();
+            let plugins = state
+                .plugins
+                .iter()
+                .map(|pkg| {
+                    let renderers = all
+                        .iter()
+                        .filter(|def| def.plugin_id == pkg.id)
+                        .map(|def| renderer_def_to_pb(def))
+                        .collect();
+                    pb::PluginInfo {
+                        id: pkg.id.clone(),
+                        name: pkg.name.clone(),
+                        version: pkg.version.clone(),
+                        has_source: pkg.has_source,
+                        renderers,
+                    }
+                })
+                .collect();
+            Res::PluginList(pb::PluginListResponse { plugins })
         }
 
         Req::WallpaperList(r) => {
@@ -1095,6 +1125,21 @@ async fn dispatch_inner(
         Req::GpuList(_) => {
             let gpus = state.gpus.iter().map(gpu_info_to_pb).collect();
             Res::GpuList(pb::GpuListResponse { gpus })
+        }
+
+        Req::PluginInstall(r) => {
+            // Extraction is blocking filesystem work; keep it off the async
+            // dispatch worker. Renderer components load on next daemon start.
+            let zip_path = r.zip_path.clone();
+            let plugin_id = tokio::task::spawn_blocking(move || {
+                crate::plugin::installer::install_zip(&zip_path)
+            })
+            .await
+            .map_err(|e| Error::Internal(anyhow::anyhow!("install join: {e}")))??;
+            Res::PluginInstall(pb::PluginInstallResponse {
+                plugin_id,
+                needs_restart: true,
+            })
         }
 
         Req::DisplayLayoutSet(r) => {

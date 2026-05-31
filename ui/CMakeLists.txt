@@ -73,6 +73,7 @@ set(SOURCES_NO_MOC
   src/query/wallpaper_query.cpp
   src/query/renderer_query.cpp
   src/query/source_query.cpp
+  src/query/plugin_query.cpp
   src/query/health_query.cpp
   src/query/display_query.cpp
   src/query/gpu_query.cpp
@@ -104,6 +105,7 @@ set(MOC_SOURCE_FILES
   src/query/wallpaper_query.cppm
   src/query/renderer_query.cppm
   src/query/source_query.cppm
+  src/query/plugin_query.cppm
   src/query/health_query.cppm
   src/query/display_query.cppm
   src/query/gpu_query.cppm
@@ -140,6 +142,7 @@ set(QML_FILES
   qml/page/WallpaperPage.qml
   qml/page/WallpaperCard.qml
   qml/page/StatusPage.qml
+  qml/page/PluginManagePage.qml
   qml/page/SettingsPage.qml
   qml/page/DisplaysPage.qml
   qml/page/SourceManagePage.qml

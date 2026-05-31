@@ -4,7 +4,6 @@ import QtQuick.Layouts
 import QtQuick.Templates as T
 import Qcm.Material as MD
 import waywallen.ui as W
-import "../component/settings"
 
 MD.Page {
     id: root
@@ -12,6 +11,23 @@ MD.Page {
     showHeader: true
     showBackground: false
     title: 'Status'
+
+    actions: [
+        MD.Action {
+            icon.name: MD.Token.icon.extension
+            text: qsTr("Plugins")
+            onTriggered: MD.Util.showPopup('waywallen.ui/PagePopup', {
+                source: 'waywallen.ui/PluginManagePage'
+            }, root)
+        },
+        MD.Action {
+            icon.name: MD.Token.icon.settings
+            text: qsTr("Settings")
+            onTriggered: MD.Util.showPopup('waywallen.ui/PagePopup', {
+                source: 'waywallen.ui/SettingsPage'
+            }, root)
+        }
+    ]
 
     component SectionTitle: MD.Text {
         typescale: MD.Token.typescale.title_medium
@@ -62,11 +78,6 @@ MD.Page {
         }
     }
 
-    Component.onCompleted: {
-        if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready)
-            reloadAll();
-    }
-
     Connections {
         target: settingsQuery
         function onPluginsChanged() {
@@ -77,22 +88,22 @@ MD.Page {
         }
     }
 
-    PluginSettingsPopup {
+    W.PluginSettingsPopup {
         id: pluginSettingsPopup
         pluginName: ""
         schemaList: []
         onResetRequested: settingsQuery.reload()
     }
 
-    W.SourceListQuery {
-        id: sourceQuery
+    Component.onCompleted: {
+        if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready)
+            reloadAll();
     }
 
     function reloadAll() {
         healthQuery.reload();
         rendererQuery.reload();
         pluginQuery.reload();
-        sourceQuery.reload();
         settingsQuery.reload();
     }
 
@@ -149,23 +160,8 @@ MD.Page {
                 contentItem: ColumnLayout {
                     spacing: 8
 
-                    RowLayout {
-                        spacing: 8
-                        SectionTitle {
-                            text: "Daemon"
-                            Layout.fillWidth: true
-                        }
-                        MD.IconButton {
-                            icon.name: MD.Token.icon.settings
-                            onClicked: MD.Util.showPopup('waywallen.ui/PagePopup', {
-                                source: 'waywallen.ui/SettingsPage'
-                            }, root)
-
-                            MD.ToolTip {
-                                visible: parent.hovered
-                                text: "Settings"
-                            }
-                        }
+                    SectionTitle {
+                        text: "Daemon"
                     }
 
                     RowLayout {
@@ -269,13 +265,13 @@ MD.Page {
                 }
             }
 
-            // --- Renderer Plugins ---
+            // --- Components ---
             SectionPane {
                 contentItem: ColumnLayout {
                     spacing: 8
 
                     SectionTitle {
-                        text: "Renderer Plugins"
+                        text: "Components"
                     }
 
                     SectionHint {
@@ -286,7 +282,7 @@ MD.Page {
 
                     SectionHint {
                         visible: !pluginQuery.renderers || pluginQuery.renderers.length === 0
-                        text: "No renderer plugins"
+                        text: "No components"
                     }
 
                     ListView {
@@ -299,7 +295,7 @@ MD.Page {
                         model: pluginQuery.renderers
 
                         delegate: MD.ListItem {
-                            id: pluginItem
+                            id: componentItem
                             required property var modelData
 
                             readonly property bool hasSettings: (modelData.settings && modelData.settings.length > 0) === true
@@ -316,80 +312,24 @@ MD.Page {
                             trailing: RowLayout {
                                 spacing: 4
                                 MD.Text {
-                                    text: (pluginItem.modelData.version || "v0.0.0")
+                                    text: "v" + (componentItem.modelData.version || "0.0.0")
                                     typescale: MD.Token.typescale.label_small
                                     color: MD.Token.color.on_surface_variant
                                 }
                                 MD.IconButton {
-                                    visible: pluginItem.hasSettings
+                                    visible: componentItem.hasSettings
                                     icon.name: MD.Token.icon.settings
                                     onClicked: {
-                                        pluginSettingsPopup.pluginName = pluginItem.modelData.name;
-                                        pluginSettingsPopup.schemaList = pluginItem.modelData.settings || [];
+                                        pluginSettingsPopup.pluginName = componentItem.modelData.name;
+                                        pluginSettingsPopup.schemaList = componentItem.modelData.settings || [];
                                         pluginSettingsPopup.allCurrentPlugins = settingsQuery.plugins || ({});
                                         pluginSettingsPopup.currentGlobal = settingsQuery.global || ({});
-                                        const p = settingsQuery.plugins ? settingsQuery.plugins[pluginItem.modelData.name] : undefined;
+                                        const p = settingsQuery.plugins ? settingsQuery.plugins[componentItem.modelData.name] : undefined;
                                         pluginSettingsPopup.currentValues = p || ({});
                                         pluginSettingsPopup.pendingValues = ({});
                                         pluginSettingsPopup.open();
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // --- Source Plugins ---
-            SectionPane {
-                contentItem: ColumnLayout {
-                    spacing: 8
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        SectionTitle {
-                            text: "Source Plugins"
-                            Layout.fillWidth: true
-                        }
-                        MD.IconButton {
-                            icon.name: MD.Token.icon.hard_drive
-                            onClicked: MD.Util.showPopup('waywallen.ui/PagePopup', {
-                                source: 'waywallen.ui/SourceManagePage'
-                            }, root)
-                        }
-                    }
-
-                    SectionHint {
-                        visible: !sourceQuery.sources || sourceQuery.sources.length === 0
-                        text: "No source plugins loaded"
-                    }
-
-                    ListView {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: contentHeight
-                        implicitHeight: contentHeight
-                        interactive: false
-                        spacing: 4
-
-                        model: sourceQuery.sources
-
-                        delegate: MD.ListItem {
-                            required property var modelData
-
-                            width: ListView.view.width
-                            radius: 12
-                            text: modelData.name || ""
-                            supportText: "Types: " + (modelData.types ? modelData.types.join(", ") : "—")
-                            leader: MD.Icon {
-                                name: MD.Token.icon.source
-                                size: 24
-                                color: MD.Token.color.on_surface_variant
-                            }
-                            trailing: MD.Text {
-                                text: "v" + (modelData.version || "?")
-                                typescale: MD.Token.typescale.label_small
-                                color: MD.Token.color.on_surface_variant
                             }
                         }
                     }

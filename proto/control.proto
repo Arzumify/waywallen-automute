@@ -63,6 +63,8 @@ message Request {
     WallpaperPropertySetRequest wallpaper_property_set = 43;
     WallpaperApplyViaPortalRequest wallpaper_apply_via_portal = 44;
     DisplayRenameRequest      display_rename = 45;
+    PluginInstallRequest      plugin_install = 46;
+    PluginListRequest         plugin_list = 47;
   }
 }
 
@@ -113,6 +115,8 @@ message Response {
     WallpaperPropertySetResponse wallpaper_property_set = 43;
     WallpaperApplyViaPortalResponse wallpaper_apply_via_portal = 44;
     DisplayRenameResponse      display_rename = 45;
+    PluginInstallResponse      plugin_install = 46;
+    PluginListResponse         plugin_list = 47;
   }
 }
 
@@ -155,6 +159,7 @@ enum ErrorCode {
   ERROR_CODE_SOURCE_EXTRAS_FAILED = 203;
   ERROR_CODE_WALLPAPER_TYPE_NOT_SUPPORTED = 204;
   ERROR_CODE_PORTAL_CALL_FAILED = 205;
+  ERROR_CODE_PLUGIN_INSTALL_FAILED = 206;
 
   // Settings
   ERROR_CODE_SETTINGS_VALIDATION_FAILED = 300;
@@ -970,4 +975,32 @@ message GpuInfo {
 message GpuListRequest {}
 message GpuListResponse {
   repeated GpuInfo gpus = 1;
+}
+
+// Install an installable plugin from a local .zip into the user plugin dir
+// ($XDG_DATA_HOME/waywallen/plugins/). The archive must contain a top-level
+// directory holding plugin.toml. Renderer components only take effect after a
+// daemon restart (the registry is built at startup), hence `needs_restart`.
+message PluginInstallRequest {
+  string zip_path = 1;
+}
+message PluginInstallResponse {
+  string plugin_id = 1;
+  bool needs_restart = 2;
+}
+
+// Installable-plugin (package) view: one entry per `[plugin]`, with the
+// renderer components it provides (carrying their settings schema so a UI
+// can offer per-plugin configuration). Source presence is a flag.
+message PluginInfo {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  bool has_source = 4;
+  repeated RendererPluginInfo renderers = 5;
+}
+
+message PluginListRequest {}
+message PluginListResponse {
+  repeated PluginInfo plugins = 1;
 }

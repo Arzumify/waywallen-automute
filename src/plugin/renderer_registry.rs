@@ -73,6 +73,31 @@ impl PluginScan {
         self.sources.extend(other.sources);
         self.plugins.extend(other.plugins);
     }
+
+    /// Installable-plugin view of the scan: one entry per `[plugin]`, with
+    /// whether it ships a source component (renderer components are looked
+    /// up from the registry by `plugin_id` when needed).
+    pub fn packages(&self) -> Vec<PluginPackageMeta> {
+        self.plugins
+            .iter()
+            .map(|m| PluginPackageMeta {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                version: m.version.clone(),
+                has_source: self.sources.iter().any(|s| s.plugin_id == m.id),
+            })
+            .collect()
+    }
+}
+
+/// Installable-plugin (package) summary, retained in `AppState` so the UI
+/// can present a plugin-centric view independent of the component registry.
+#[derive(Debug, Clone)]
+pub struct PluginPackageMeta {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub has_source: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

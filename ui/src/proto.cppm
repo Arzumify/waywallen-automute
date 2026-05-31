@@ -73,6 +73,12 @@ using proto::GpuInfo;
 using proto::GpuListRequest;
 using proto::GpuListResponse;
 
+using proto::PluginInstallRequest;
+using proto::PluginInstallResponse;
+using proto::PluginInfo;
+using proto::PluginListRequest;
+using proto::PluginListResponse;
+
 using proto::LibraryInstance;
 using proto::LibraryListRequest;
 using proto::LibraryListResponse;

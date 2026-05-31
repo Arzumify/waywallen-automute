@@ -36,6 +36,9 @@ mod ws_server;
 pub struct AppState {
     pub renderer_manager: Arc<renderer_manager::RendererManager>,
     pub source_manager: Arc<tokio::sync::Mutex<plugin::source_manager::SourceManager>>,
+    /// Installable-plugin (package) list from the startup scan. Read-only;
+    /// surfaced to the UI via `PluginListRequest` for a plugin-centric view.
+    pub plugins: Arc<Vec<plugin::renderer_registry::PluginPackageMeta>>,
     /// Read-only mirror of the latest scan results. Updated atomically
     /// by `control::refresh_sources` after the Lua scan finishes; read
     /// by `WallpaperList`/`WallpaperApply`/`SourceList` so those handlers
@@ -255,6 +258,9 @@ async fn async_main() -> anyhow::Result<()> {
             plugin_scan.merge(plugin::renderer_registry::scan_plugins(&plugins_dir));
         }
     }
+    // Installable-plugin (package) list for the UI's plugin-centric view.
+    // Computed before `sources` is taken so `has_source` is accurate.
+    let plugin_packages = Arc::new(plugin_scan.packages());
     let source_refs = std::mem::take(&mut plugin_scan.sources);
 
     let mut registry = plugin::renderer_registry::RendererRegistry::new();
@@ -351,6 +357,7 @@ async fn async_main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         renderer_manager: renderer_mgr,
         source_manager: source_mgr.clone(),
+        plugins: plugin_packages,
         source_snapshot,
         router: router.clone(),
         settings: settings_store,
