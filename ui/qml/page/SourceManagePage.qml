@@ -14,14 +14,14 @@ MD.Page {
     }
 
     contentItem: Item {
-        implicitHeight: children[0].implicitHeight + m_fab.implicitHeight + 16 * 2
-        implicitWidth: children[0].implicitWidth
+        implicitHeight: m_view.contentHeight + m_fab.implicitHeight + 16 * 2
+        implicitWidth: m_view.implicitWidth
 
         MD.VerticalListView {
             id: m_view
             width: parent.width
+            height: parent.height - m_fab.height - 16 * 2
             model: W.App.libraryManager.libraries
-            expand: true
             spacing: 8
 
             leftMargin: 12
