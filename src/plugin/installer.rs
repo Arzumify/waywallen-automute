@@ -67,7 +67,10 @@ pub fn install_zip(zip_path: &str) -> Result<String> {
         let manifest = dest_root.join(d).join("plugin.toml");
         if manifest.is_file() {
             let id = read_plugin_id(&manifest)?;
-            log::info!("installed plugin '{id}' into {}", dest_root.join(d).display());
+            log::info!(
+                "installed plugin '{id}' into {}",
+                dest_root.join(d).display()
+            );
             return Ok(id);
         }
     }

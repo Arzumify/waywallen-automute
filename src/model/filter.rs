@@ -183,7 +183,10 @@ fn tag_condition_to_condition(tag: &str, cond: pb::StringCondition) -> Option<Co
 
 /// Tag-set membership. IS → has any of `values`; IS_NOT → has none of
 /// them. Empty list imposes no constraint.
-fn tag_list_condition_to_condition(values: &[String], cond: pb::StringCondition) -> Option<Condition> {
+fn tag_list_condition_to_condition(
+    values: &[String],
+    cond: pb::StringCondition,
+) -> Option<Condition> {
     let names: Vec<&String> = values.iter().filter(|v| !v.is_empty()).collect();
     if names.is_empty() {
         return None;

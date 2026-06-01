@@ -238,7 +238,12 @@ impl GlobalSettings {
     ) {
         use crate::control_proto as pb;
         let (mut filters, logics) = self.wallpaper_filter.to_pb();
-        let mut next_group = filters.iter().map(|f| f.group).max().map(|g| g + 1).unwrap_or(0);
+        let mut next_group = filters
+            .iter()
+            .map(|f| f.group)
+            .max()
+            .map(|g| g + 1)
+            .unwrap_or(0);
         for ty in &self.wallpaper_skip_types {
             filters.push(pb::WallpaperFilterRule {
                 r#type: pb::WallpaperFilterType::WpType as i32,
