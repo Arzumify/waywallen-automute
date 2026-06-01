@@ -101,10 +101,30 @@ MD.Page {
                         size: 24
                         color: MD.Token.color.on_surface_variant
                     }
-                    trailing: MD.Text {
-                        text: "v" + (pluginItem.modelData.version || "0.0.0")
-                        typescale: MD.Token.typescale.label_small
-                        color: MD.Token.color.on_surface_variant
+                    trailing: RowLayout {
+                        spacing: 6
+                        W.Tag {
+                            Layout.alignment: Qt.AlignVCenter
+                            visible: pluginItem.modelData.system === true
+                            text: qsTr("system")
+                            bgColor: MD.Token.color.tertiary_container
+                            fgColor: MD.Token.color.on_tertiary_container
+                        }
+                        W.Tag {
+                            Layout.alignment: Qt.AlignVCenter
+                            text: "v" + (pluginItem.modelData.version || "0.0.0")
+                        }
+                    }
+                    below: Flow {
+                        spacing: 6
+                        bottomPadding: 8
+                        Repeater {
+                            model: pluginItem.modelData.renderers
+                            delegate: W.Tag {
+                                required property var modelData
+                                text: modelData.name || ""
+                            }
+                        }
                     }
                 }
             }

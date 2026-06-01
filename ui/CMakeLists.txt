@@ -124,8 +124,10 @@ set(MODULES
 
 set(QML_FILES
   qml/Window.qml
+  qml/Global.qml
   qml/component/StatusDot.qml
   qml/component/PagePopup.qml
+  qml/component/Tag.qml
   qml/component/GpuTag.qml
   qml/component/KdeDisplaysHelp.qml
   qml/component/ThumbnailImage.qml
@@ -153,7 +155,7 @@ set(RESOURCES
   assets/waywallen-ui.svg
 )
 
-#set_source_files_properties(qml/Global.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/Global.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 set(QML_REG_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/waywallen/register"

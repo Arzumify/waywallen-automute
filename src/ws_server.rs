@@ -823,6 +823,7 @@ async fn dispatch_inner(
                         version: pkg.version.clone(),
                         has_source: pkg.has_source,
                         renderers,
+                        system: pkg.system,
                     }
                 })
                 .collect();

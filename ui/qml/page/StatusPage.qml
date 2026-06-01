@@ -311,10 +311,9 @@ MD.Page {
                             }
                             trailing: RowLayout {
                                 spacing: 4
-                                MD.Text {
+                                W.Tag {
+                                    Layout.alignment: Qt.AlignVCenter
                                     text: "v" + (componentItem.modelData.version || "0.0.0")
-                                    typescale: MD.Token.typescale.label_small
-                                    color: MD.Token.color.on_surface_variant
                                 }
                                 MD.IconButton {
                                     visible: componentItem.hasSettings

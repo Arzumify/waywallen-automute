@@ -998,6 +998,7 @@ message PluginInfo {
   string version = 3;
   bool has_source = 4;
   repeated RendererPluginInfo renderers = 5;
+  bool system = 6;
 }
 
 message PluginListRequest {}

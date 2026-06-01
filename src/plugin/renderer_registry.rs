@@ -35,6 +35,11 @@ pub struct PluginMeta {
     /// (newline-separated). Not parsed from the TOML.
     #[serde(skip)]
     pub files: Vec<String>,
+    /// True when the plugin lives outside `$XDG_DATA_HOME` (bundled /
+    /// system install or an explicit `--plugin` root). Computed at scan
+    /// time, not read from the manifest.
+    #[serde(skip)]
+    pub system: bool,
 }
 
 /// Hard-coded name of the per-plugin file manifest every plugin must
@@ -85,6 +90,7 @@ impl PluginScan {
                 name: m.name.clone(),
                 version: m.version.clone(),
                 has_source: self.sources.iter().any(|s| s.plugin_id == m.id),
+                system: m.system,
             })
             .collect()
     }
@@ -98,6 +104,8 @@ pub struct PluginPackageMeta {
     pub name: String,
     pub version: String,
     pub has_source: bool,
+    /// Not installed under `$XDG_DATA_HOME` (bundled / system / explicit root).
+    pub system: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -531,6 +539,7 @@ impl RendererRegistry {
 /// source components it provides. Bad manifests are logged and skipped.
 pub fn scan_plugins(dir: &Path) -> PluginScan {
     let mut out = PluginScan::default();
+    let user_root = standard_plugin_dirs("plugins").into_iter().next_back();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
@@ -559,6 +568,7 @@ pub fn scan_plugins(dir: &Path) -> PluginScan {
         };
 
         let mut meta = manifest.plugin;
+        meta.system = !is_under(&plugin_dir, user_root.as_deref());
 
         // Every plugin must ship a newline-separated `files.txt` manifest.
         let files_path = plugin_dir.join(PLUGIN_FILES_MANIFEST);
@@ -618,6 +628,17 @@ pub fn scan_plugins(dir: &Path) -> PluginScan {
         out.plugins.push(meta);
     }
     out
+}
+
+/// Whether `path` lives under `root` (the user XDG plugins dir). Compares
+/// canonicalized paths so symlinked install prefixes still match; falls
+/// back to a plain prefix check when canonicalization fails.
+fn is_under(path: &Path, root: Option<&Path>) -> bool {
+    let Some(root) = root else { return false };
+    match (path.canonicalize(), root.canonicalize()) {
+        (Ok(p), Ok(r)) => p.starts_with(r),
+        _ => path.starts_with(root),
+    }
 }
 
 /// Join `p` against `base` when relative; pass through when absolute.

@@ -79,6 +79,7 @@ void PluginListQuery::reload() {
                 m[u"name"_s]      = p.name();
                 m[u"version"_s]   = p.version();
                 m[u"hasSource"_s] = p.hasSource();
+                m[u"system"_s]    = p.system();
                 QVariantList renderers;
                 for (const auto& r : p.renderers()) {
                     renderers.append(renderer_to_map(r));
