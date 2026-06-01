@@ -1372,7 +1372,7 @@ async fn dispatch_inner(
                 Some(existing_id) => {
                     log::info!(
                         "wallpaper_apply: reusing renderer {existing_id} for wallpaper {}",
-                        entry.id
+                        entry.item_id
                     );
                     existing_id
                 }
@@ -1425,7 +1425,7 @@ async fn dispatch_inner(
             // so the next sequential/random step has an anchor.
             {
                 let mut q = state.queue.lock().await;
-                q.current = Some(entry.id.clone());
+                q.current = Some(entry.item_id.to_string());
                 if !entry.library_root.is_empty() {
                     if let Some(rel) =
                         crate::queue::relative_under_root(&entry.library_root, &entry.resource)
@@ -1460,7 +1460,7 @@ async fn dispatch_inner(
                 r.display_ids.clone()
             };
             let keys = state.router.display_settings_keys(&target_ids).await;
-            let wp_id = entry.id.clone();
+            let wp_id = entry.item_id.to_string();
             state.settings.update(|s| {
                 for (_did, key) in &keys {
                     let prefs = s.displays.entry(key.clone()).or_default();
@@ -1475,7 +1475,7 @@ async fn dispatch_inner(
 
             Res::WallpaperApply(pb::WallpaperApplyResponse {
                 renderer_id,
-                wallpaper_id: entry.id,
+                wallpaper_id: entry.item_id.to_string(),
                 wp_type: entry.wp_type,
                 name: entry.name,
             })
@@ -1888,7 +1888,7 @@ fn entry_to_pb(
         .unwrap_or_default();
 
     pb::WallpaperEntry {
-        id: e.id.clone(),
+        id: e.item_id.to_string(),
         name: e.name.clone(),
         wp_type: e.wp_type.clone(),
         resource: e.resource.clone(),

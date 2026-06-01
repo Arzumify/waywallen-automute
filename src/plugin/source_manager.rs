@@ -215,7 +215,9 @@ impl SourceManager {
         for pair in results.sequence_values::<LuaTable>() {
             let tbl = pair?;
             let entry = WallpaperEntry {
-                id: tbl.get("id").unwrap_or_default(),
+                // Identity comes from the DB item.id, assigned after
+                // sync; plugins don't supply it.
+                item_id: 0,
                 name: tbl.get("name").unwrap_or_default(),
                 wp_type: tbl.get("wp_type").unwrap_or_default(),
                 resource: tbl.get("resource").unwrap_or_default(),
@@ -544,7 +546,7 @@ impl SourceManager {
     }
 
     pub fn get(&self, id: &str) -> Option<&WallpaperEntry> {
-        self.entries.iter().find(|e| e.id == id)
+        self.entries.iter().find(|e| e.item_id.to_string() == id)
     }
 
     /// Ask the plugin that produced `entry` for the CLI `extras`
@@ -589,7 +591,7 @@ impl SourceManager {
                 return Ok::<_, mlua::Error>(entry.metadata.clone());
             };
             let entry_tbl = self.lua.create_table()?;
-            entry_tbl.set("id", entry.id.clone())?;
+            entry_tbl.set("item_id", entry.item_id)?;
             entry_tbl.set("name", entry.name.clone())?;
             entry_tbl.set("wp_type", entry.wp_type.clone())?;
             entry_tbl.set("resource", entry.resource.clone())?;
@@ -658,7 +660,7 @@ impl SourceManager {
             Err(_) => return Ok(None),
         };
         let entry_tbl = self.lua.create_table()?;
-        entry_tbl.set("id", entry.id.clone())?;
+        entry_tbl.set("item_id", entry.item_id)?;
         entry_tbl.set("name", entry.name.clone())?;
         entry_tbl.set("wp_type", entry.wp_type.clone())?;
         entry_tbl.set("resource", entry.resource.clone())?;
@@ -1059,7 +1061,7 @@ return M
         assert_eq!(entries.len(), 1);
         // The Lua plugin called ctx.probe successfully (it would error() otherwise).
         // Verify the entry was emitted correctly.
-        assert_eq!(entries[0].id, "v1");
+        assert_eq!(entries[0].resource, "/lib/v1.mp4");
     }
 
     #[test]
@@ -1093,7 +1095,7 @@ return M
 
         block(async { mgr.scan_all(&HashMap::new()).await.unwrap() });
         assert_eq!(mgr.list().len(), 1);
-        assert_eq!(mgr.list()[0].id, "w1");
+        assert_eq!(mgr.list()[0].name, "Test Wallpaper");
         assert_eq!(mgr.list()[0].wp_type, "image");
         assert_eq!(mgr.list()[0].plugin_name, "test");
 
@@ -1103,7 +1105,9 @@ return M
         let by_type_empty = mgr.list_by_type("video");
         assert!(by_type_empty.is_empty());
 
-        let found = mgr.get("w1");
+        // Identity is the DB item.id, assigned at sync time; this
+        // scan-only test leaves it at 0, so look up by "0".
+        let found = mgr.get("0");
         assert!(found.is_some());
 
         let plugins = mgr.plugins().unwrap();

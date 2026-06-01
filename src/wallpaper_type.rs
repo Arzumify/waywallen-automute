@@ -6,8 +6,12 @@ pub type WallpaperType = String;
 /// A single wallpaper entry discovered by a source plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WallpaperEntry {
-    /// Unique id within the source that produced it (e.g. file path, workshop id).
-    pub id: String,
+    /// Canonical identity: the DB `item.id` for this entry's
+    /// `(library_id, path)`. Filled by the daemon after the scan is
+    /// synced to the DB (zero until then). Plugins do not assign it —
+    /// they only carry the optional `external_id` (e.g. workshop id).
+    #[serde(default)]
+    pub item_id: i64,
     /// Human-readable display name.
     pub name: String,
     /// The wallpaper type string (e.g. "scene", "image", "video").

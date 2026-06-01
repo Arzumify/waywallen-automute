@@ -536,19 +536,27 @@ pub async fn list_items_by_plugin(
         .with_context(|| format!("select items plugin={plugin_id}"))
 }
 
-pub async fn delete_items_missing(
+/// Sweep stale items: delete every item in `library_ids` whose
+/// `sync_at` is older than `before` (the timestamp captured at the
+/// start of the sync round). Items the round re-saw were stamped
+/// `>= before` and survive; items not seen this round are pruned.
+/// Scoping to `library_ids` (only the libraries actually visited and
+/// present this round) protects items of momentarily-unreachable
+/// libraries from being wiped.
+pub async fn delete_items_synced_before(
     db: &DatabaseConnection,
-    library_id: i64,
-    keep: &HashSet<String>,
+    library_ids: &[i64],
+    before: i64,
 ) -> Result<u64> {
-    let mut q = item::Entity::delete_many().filter(item::Column::LibraryId.eq(library_id));
-    if !keep.is_empty() {
-        q = q.filter(item::Column::Path.is_not_in(keep.iter().cloned()));
+    if library_ids.is_empty() {
+        return Ok(0);
     }
-    let res = q
+    let res = item::Entity::delete_many()
+        .filter(item::Column::LibraryId.is_in(library_ids.iter().copied()))
+        .filter(item::Column::SyncAt.lt(before))
         .exec(db)
         .await
-        .with_context(|| format!("delete missing items lib={library_id}"))?;
+        .context("sweep stale items by sync_at")?;
     Ok(res.rows_affected)
 }
 
@@ -1217,11 +1225,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_items_missing_prunes_and_respects_library_scope() {
+    async fn delete_items_synced_before_sweeps_only_scoped_and_stale() {
         let db = mem_db().await;
         let p = upsert_plugin(&db, "p", "").await.unwrap();
         let l1 = add_library(&db, p.id, "/one").await.unwrap();
         let l2 = add_library(&db, p.id, "/two").await.unwrap();
+        // Seed three items in l1 and one in l2 (all stamped "old").
         for rel in ["a", "b", "c"] {
             upsert_item(&db, minimal_args(p.id, l1.id, rel, "image"))
                 .await
@@ -1230,8 +1239,19 @@ mod tests {
         upsert_item(&db, minimal_args(p.id, l2.id, "z", "image"))
             .await
             .unwrap();
-        let keep: HashSet<String> = ["a".to_owned()].into_iter().collect();
-        let deleted = delete_items_missing(&db, l1.id, &keep).await.unwrap();
+        // Advance the clock, then re-see only l1/a — it gets a fresh
+        // sync_at; the cutoff sits between the two timestamps.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let cutoff = crate::tasks::now_ms();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        upsert_item(&db, minimal_args(p.id, l1.id, "a", "image"))
+            .await
+            .unwrap();
+        // Sweep l1 only: stale b/c go, fresh a stays; l2 untouched
+        // because it isn't in the scoped set.
+        let deleted = delete_items_synced_before(&db, &[l1.id], cutoff)
+            .await
+            .unwrap();
         assert_eq!(deleted, 2);
         assert_eq!(list_items_by_library(&db, l1.id).await.unwrap().len(), 1);
         assert_eq!(list_items_by_library(&db, l2.id).await.unwrap().len(), 1);

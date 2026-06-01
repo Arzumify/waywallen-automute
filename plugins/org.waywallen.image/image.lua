@@ -85,9 +85,6 @@ function M.scan(ctx)
                     local filename = ctx.filename(path) or path
                     local name = strip_ext(filename)
                     table.insert(entries, {
-                        -- Path-scoped id keeps files in different albums
-                        -- with the same basename distinguishable.
-                        id = "image:" .. path,
                         name = name,
                         wp_type = "image",
                         resource = path,

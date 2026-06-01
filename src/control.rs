@@ -162,7 +162,7 @@ async fn apply_via_portal_inner(app: &Arc<AppState>, id: &str) -> Result<PortalA
         .map_err(|e| Error::PortalCallFailed(format!("reply decode: {e}")))?;
 
     Ok(PortalApplyResult {
-        wallpaper_id: entry.id,
+        wallpaper_id: entry.item_id.to_string(),
         uri,
     })
 }
@@ -337,7 +337,7 @@ async fn apply_wallpaper_core(
 
     {
         let mut q = app.queue.lock().await;
-        q.current = Some(entry.id.clone());
+        q.current = Some(entry.item_id.to_string());
         // Stash the DB id so sequential / random stepping has an anchor.
         // Best-effort: lookup may fail if sync hasn't picked the entry up.
         if !entry.library_root.is_empty() {
@@ -367,7 +367,7 @@ async fn apply_wallpaper_core(
         Some(ids) => ids.to_vec(),
     };
     let keys = app.router.display_settings_keys(&target_ids).await;
-    let wp_id = entry.id.clone();
+    let wp_id = entry.item_id.to_string();
     app.settings.update(|s| {
         for (_did, key) in &keys {
             let prefs = s.displays.entry(key.clone()).or_default();
@@ -472,7 +472,7 @@ async fn bridge_to_entry_id(app: &Arc<AppState>, row: &repo::QueueRow) -> Result
         if entry.library_root.trim_end_matches('/') == row.library_path.trim_end_matches('/')
             && rel == row.item_path
         {
-            return Ok(entry.id.clone());
+            return Ok(entry.item_id.to_string());
         }
     }
     Err(Error::WallpaperNotFound(format!(
@@ -795,6 +795,23 @@ pub async fn list_library_snapshots(
 /// name that owns it. Feeds per-plugin library paths into Lua's
 /// `ctx.libraries()` and seeds `protected_libraries` on sync so an
 /// empty scan doesn't nuke user-configured folders.
+/// Dedup a path list by canonical (symlink-resolved) target, preserving
+/// first-seen order. Paths that fail to canonicalize (e.g. don't exist)
+/// are kept and de-duped by their raw string instead. The original
+/// string is retained as the entry's `library_root`.
+fn dedup_paths_by_canonical(paths: &[String]) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<std::path::PathBuf> = HashSet::new();
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        let canon = std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+        if seen.insert(canon) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
 pub async fn libraries_by_plugin_name(
     db: &sea_orm::DatabaseConnection,
 ) -> Result<HashMap<String, Vec<String>>> {
@@ -847,7 +864,16 @@ async fn refresh_sources_inner(app: &Arc<AppState>) -> Result<usize> {
     let libs_by_plugin = libraries_by_plugin_name(&app.db).await?;
 
     let source_mgr = app.source_manager.clone();
-    let libs_for_scan = libs_by_plugin.clone();
+    // Scan each physical directory once: symlinked Steam aliases
+    // (~/.steam/steam vs ~/.local/share/Steam) otherwise emit the same
+    // workshop entries twice (duplicate id), which both doubles the
+    // wallpaper list and triggers the UI's duplicate-key phantom-row bug.
+    // The full list still feeds `protected` below so both library rows
+    // survive the missing-library sweep.
+    let libs_for_scan: HashMap<String, Vec<String>> = libs_by_plugin
+        .iter()
+        .map(|(name, paths)| (name.clone(), dedup_paths_by_canonical(paths)))
+        .collect();
     // The Lua VM lock (`source_manager`) is held only during the scan
     // itself. Read consumers (`WallpaperList`/`WallpaperApply`/
     // `SourceList`) go through `source_snapshot` instead and never park
@@ -873,21 +899,29 @@ async fn refresh_sources_inner(app: &Arc<AppState>) -> Result<usize> {
         sm.plugins().unwrap_or_default()
     };
 
-    // Install the fresh snapshot under the read-only mirror's brief
-    // write guard. Cheap clone here keeps `snapshot` available for the
-    // per-plugin DB sync below.
-    {
-        let mut snap = app.source_snapshot.write().await;
-        snap.install(snapshot.clone(), plugins.clone());
-    }
-
+    // Sync to the DB first so every entry gets its canonical identity
+    // (`item.id`); the snapshot is installed afterwards carrying those
+    // ids. Readers keep seeing the previous snapshot until the swap.
     for info in &plugins {
         let entries: Vec<_> = snapshot
             .iter()
             .filter(|e| e.plugin_name == info.name)
             .cloned()
             .collect();
-        let protected = libs_by_plugin.get(&info.name).cloned().unwrap_or_default();
+        // Libraries reachable this round = registered roots that still
+        // exist on disk. The full (non-deduped) list is passed so a
+        // symlink alias of a scanned root is also swept clean; a root
+        // that's gone (unmounted) is omitted so its items are spared.
+        let present: Vec<String> = libs_by_plugin
+            .get(&info.name)
+            .map(|paths| {
+                paths
+                    .iter()
+                    .filter(|p| std::path::Path::new(p.as_str()).exists())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         match sync::sync_plugin_entries(
             &app.db,
             sync::PluginRef {
@@ -895,24 +929,40 @@ async fn refresh_sources_inner(app: &Arc<AppState>) -> Result<usize> {
                 version: &info.version,
             },
             &entries,
-            &protected,
+            &present,
         )
         .await
         {
             Ok((summary, _)) => log::info!(
-                "sync plugin={} v{}: +{} / -{} items, -{} libraries, {} dropped",
+                "sync plugin={} v{}: +{} / -{} items, {} dropped",
                 info.name,
                 info.version,
                 summary.items_upserted,
                 summary.items_deleted,
-                summary.libraries_deleted,
                 summary.dropped,
             ),
             Err(e) => log::warn!("sync plugin={} failed: {e:#}", info.name),
         }
     }
 
-    let count = snapshot.len();
+    // Stamp each entry with its DB `item.id` (the wire/snapshot
+    // identity) and drop entries the sync layer couldn't place (no DB
+    // row → not addressable). Then install the enriched snapshot.
+    let meta = crate::wallpaper_sort::load_db_meta_map(app).await?;
+    let enriched: Vec<WallpaperEntry> = snapshot
+        .into_iter()
+        .filter_map(|mut e| {
+            let rel = crate::model::sync::relative_under_root(&e.library_root, &e.resource)?;
+            let m = meta.get(&(e.library_root.clone(), rel))?;
+            e.item_id = m.id;
+            Some(e)
+        })
+        .collect();
+    let count = enriched.len();
+    {
+        let mut snap = app.source_snapshot.write().await;
+        snap.install(enriched, plugins);
+    }
     // Queue plays dynamically from settings.wallpaper_filter; nothing
     // to rebind after a sources refresh — the next `step()` will see
     // the new DB rows. Invalidate any pre-built shuffle round so it's

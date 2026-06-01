@@ -118,5 +118,8 @@ pub async fn ordered_entry_ids(
         apply_wallpaper_sorts(&mut filtered, sorts, &db_meta_map);
     }
 
-    Ok(filtered.into_iter().map(|e| e.id.clone()).collect())
+    Ok(filtered
+        .into_iter()
+        .map(|e| e.item_id.to_string())
+        .collect())
 }

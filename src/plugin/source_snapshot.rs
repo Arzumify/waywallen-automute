@@ -38,7 +38,7 @@ impl SourceSnapshot {
         let mut by_id: HashMap<String, usize> = HashMap::with_capacity(entries.len());
         for (idx, e) in entries.iter().enumerate() {
             by_type.entry(e.wp_type.clone()).or_default().push(idx);
-            by_id.insert(e.id.clone(), idx);
+            by_id.insert(e.item_id.to_string(), idx);
         }
         self.entries = entries;
         self.by_type = by_type;
@@ -74,12 +74,12 @@ impl SourceSnapshot {
 mod tests {
     use super::*;
 
-    fn entry(id: &str, ty: &str) -> WallpaperEntry {
+    fn entry(item_id: i64, ty: &str) -> WallpaperEntry {
         WallpaperEntry {
-            id: id.to_string(),
-            name: id.to_string(),
+            item_id,
+            name: item_id.to_string(),
             wp_type: ty.to_string(),
-            resource: format!("/tmp/{id}"),
+            resource: format!("/tmp/{item_id}"),
             preview: None,
             metadata: Default::default(),
             description: None,
@@ -98,27 +98,23 @@ mod tests {
     fn install_indexes_entries() {
         let mut snap = SourceSnapshot::default();
         snap.install(
-            vec![
-                entry("a", "image"),
-                entry("b", "image"),
-                entry("c", "scene"),
-            ],
+            vec![entry(1, "image"), entry(2, "image"), entry(3, "scene")],
             vec![],
         );
         assert_eq!(snap.len(), 3);
         assert_eq!(snap.list_by_type("image").len(), 2);
         assert_eq!(snap.list_by_type("scene").len(), 1);
-        assert!(snap.get("b").is_some());
+        assert!(snap.get("2").is_some());
         assert!(snap.get("missing").is_none());
     }
 
     #[test]
     fn install_replaces_indexes() {
         let mut snap = SourceSnapshot::default();
-        snap.install(vec![entry("a", "image")], vec![]);
-        snap.install(vec![entry("z", "video")], vec![]);
-        assert!(snap.get("a").is_none());
-        assert!(snap.get("z").is_some());
+        snap.install(vec![entry(1, "image")], vec![]);
+        snap.install(vec![entry(9, "video")], vec![]);
+        assert!(snap.get("1").is_none());
+        assert!(snap.get("9").is_some());
         assert!(snap.list_by_type("image").is_empty());
     }
 }

@@ -38,18 +38,26 @@ pub struct SyncSummary {
 
 /// Persist the full state of one plugin. Idempotent; reports counts.
 ///
-/// `protected_libraries` lists library paths that must not be deleted
-/// even if the scan returned no entries for them. Use this to feed in
-/// the user-managed library set from the DB so an empty (or
-/// momentarily-failing) scan does not nuke the user's configured
-/// folders. Pass `&[]` for the legacy "scan owns the library set"
-/// behaviour, e.g. in tests.
+/// Stale items are pruned by timestamp: a `seen_before` instant is
+/// captured up front, every upsert this round stamps `sync_at` at or
+/// after it, and afterwards items older than `seen_before` are swept —
+/// but only within `present_libraries`. `present_libraries` lists the
+/// library paths that were actually reachable this round (root exists
+/// on disk); items of a momentarily-unreachable library are left
+/// untouched. A present library that returned no entries gets all its
+/// items swept. Library rows themselves are never deleted here — that
+/// is an explicit user action.
 pub async fn sync_plugin_entries(
     db: &DatabaseConnection,
     plugin: PluginRef<'_>,
     entries: &[WallpaperEntry],
-    protected_libraries: &[String],
+    present_libraries: &[String],
 ) -> Result<(SyncSummary, super::entities::source_plugin::Model)> {
+    // Captured before any upsert so this round's writes stamp a
+    // `sync_at >= seen_before`; the post-sync sweep deletes anything
+    // strictly older that we therefore did not re-see.
+    let seen_before = crate::tasks::now_ms();
+
     let plugin_model = repo::upsert_plugin(db, plugin.name, plugin.version)
         .await
         .with_context(|| format!("upsert plugin={}", plugin.name))?;
@@ -63,9 +71,8 @@ pub async fn sync_plugin_entries(
         if entry.library_root.is_empty() {
             dropped += 1;
             log::warn!(
-                "sync plugin={} drop entry id={} resource={}: empty library_root",
+                "sync plugin={} drop entry resource={}: empty library_root",
                 plugin.name,
-                entry.id,
                 entry.resource,
             );
             continue;
@@ -106,16 +113,13 @@ pub async fn sync_plugin_entries(
         dropped,
         ..Default::default()
     };
-    let mut keep_lib_paths: HashSet<String> = HashSet::with_capacity(grouped.len());
 
     for (lib_path, items) in &grouped {
         let lib_model = match repo::find_library(db, plugin_model.id, lib_path).await? {
             Some(existing) => existing,
             None => repo::add_library(db, plugin_model.id, lib_path).await?,
         };
-        keep_lib_paths.insert(lib_path.clone());
 
-        let mut keep_items: HashSet<String> = HashSet::with_capacity(items.len());
         for (rel, entry) in items {
             let preview_rel = entry
                 .preview
@@ -156,20 +160,22 @@ pub async fn sync_plugin_entries(
                 .filter_map(|n| tag_id_by_lower.get(&n.trim().to_lowercase()).copied())
                 .collect();
             repo::replace_item_tags(db, persisted.id, &tag_ids).await?;
-            keep_items.insert(rel.clone());
+            summary.items_upserted += 1;
         }
-        summary.items_upserted += keep_items.len();
-        summary.items_deleted += repo::delete_items_missing(db, lib_model.id, &keep_items).await?;
     }
 
-    // Protect user-managed libraries from being swept up by the
-    // missing-library deletion: even if the scan emitted no entries
-    // for them this round, they still belong to the user.
-    for path in protected_libraries {
-        keep_lib_paths.insert(path.clone());
-    }
-    summary.libraries_deleted +=
-        repo::delete_libraries_missing(db, plugin_model.id, &keep_lib_paths).await?;
+    // Timestamp sweep: drop items not re-seen this round, scoped to the
+    // libraries that were actually present. Map the caller's present
+    // paths to this plugin's library ids.
+    let present: HashSet<&str> = present_libraries.iter().map(String::as_str).collect();
+    let present_ids: Vec<i64> = repo::list_libraries_by_plugin(db, plugin_model.id)
+        .await?
+        .into_iter()
+        .filter(|l| present.contains(l.path.as_str()))
+        .map(|l| l.id)
+        .collect();
+    summary.items_deleted +=
+        repo::delete_items_synced_before(db, &present_ids, seen_before).await?;
 
     Ok((summary, plugin_model))
 }
@@ -194,7 +200,7 @@ mod tests {
         wp_type: &str,
     ) -> WallpaperEntry {
         WallpaperEntry {
-            id: resource.to_owned(),
+            item_id: 0,
             name: resource.to_owned(),
             wp_type: wp_type.to_owned(),
             resource: resource.to_owned(),
@@ -353,7 +359,7 @@ mod tests {
     async fn rich_columns_and_tags_persist() {
         let db = mem_db().await;
         let we = WallpaperEntry {
-            id: "12345".to_owned(),
+            item_id: 0,
             name: "Forest River".to_owned(),
             wp_type: "scene".to_owned(),
             resource: "/ws/12345/scene.pkg".to_owned(),
@@ -462,8 +468,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn second_sync_prunes_items_and_libraries() {
+    async fn second_sync_prunes_unseen_items_in_present_libraries() {
         let db = mem_db().await;
+        let present = ["/a".to_owned(), "/b".to_owned()];
         let first = [
             entry("p", "/a", "/a/x.png", "image"),
             entry("p", "/a", "/a/y.png", "image"),
@@ -476,11 +483,18 @@ mod tests {
                 version: "1",
             },
             &first,
-            &[],
+            &present,
         )
         .await
         .unwrap();
 
+        // Advance the clock so the second round's `seen_before` is
+        // strictly newer than the first round's `sync_at` stamps.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
+        // Both /a and /b are present this round, but only /a/x.png is
+        // re-seen. /a/y.png (stale) and /b/z.png (present-but-empty
+        // library) are both swept — the option-B behaviour.
         let second = [entry("p", "/a", "/a/x.png", "image")];
         let (summary, _) = sync_plugin_entries(
             &db,
@@ -489,17 +503,18 @@ mod tests {
                 version: "1",
             },
             &second,
-            &[],
+            &present,
         )
         .await
         .unwrap();
         assert_eq!(summary.items_upserted, 1);
-        assert_eq!(summary.items_deleted, 1);
-        assert_eq!(summary.libraries_deleted, 1);
+        assert_eq!(summary.items_deleted, 2);
+        // Library rows are never deleted by sync.
+        assert_eq!(summary.libraries_deleted, 0);
     }
 
     #[tokio::test]
-    async fn empty_snapshot_prunes_all_libraries() {
+    async fn unreachable_library_is_protected_from_sweep() {
         let db = mem_db().await;
         let _ = sync_plugin_entries(
             &db,
@@ -508,10 +523,15 @@ mod tests {
                 version: "",
             },
             &[entry("p", "/one", "/one/x.png", "image")],
-            &[],
+            &["/one".to_owned()],
         )
         .await
         .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
+        // Empty scan AND the library is not reported present (e.g. the
+        // disk was unmounted) — its item must survive.
         let (summary, _) = sync_plugin_entries(
             &db,
             PluginRef {
@@ -523,7 +543,30 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(summary.libraries_deleted, 1);
+        assert_eq!(summary.items_deleted, 0);
+        let plugin = repo::find_plugin_by_name(&db, "p").await.unwrap().unwrap();
+        assert_eq!(
+            repo::list_items_by_plugin(&db, plugin.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Now the library is reported present but still empty → swept.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let (summary, _) = sync_plugin_entries(
+            &db,
+            PluginRef {
+                name: "p",
+                version: "",
+            },
+            &[],
+            &["/one".to_owned()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.items_deleted, 1);
     }
 
     #[tokio::test]
