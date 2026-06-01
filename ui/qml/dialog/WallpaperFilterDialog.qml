@@ -21,6 +21,10 @@ MD.Dialog {
     // whole list.
     property var filterTags: []
     signal applyFilterTags(var tags)
+    // Quick content-rating toggles (like Types): chips show all ratings;
+    // checked = shown, unchecked ones are recorded as skipped.
+    property var skipContentRatings: []
+    signal toggleSkipRating(string rating)
     horizontalPadding: 16
     implicitWidth: Math.min(440, parent ? parent.width - 48 : 440)
     standardButtons: T.Dialog.Close
@@ -30,7 +34,13 @@ MD.Dialog {
     W.TagListQuery {
         id: tagListQuery
     }
-    onAboutToShow: tagListQuery.reload()
+    W.ContentRatingListQuery {
+        id: ratingListQuery
+    }
+    onAboutToShow: {
+        tagListQuery.reload();
+        ratingListQuery.reload();
+    }
 
     contentItem: MD.VerticalListView {
         id: rulesView
@@ -114,6 +124,33 @@ MD.Dialog {
                 }
             }
 
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.bottomMargin: 4
+                spacing: 4
+                visible: ratingListQuery.ratings && ratingListQuery.ratings.length > 0
+
+                MD.Label {
+                    text: qsTr("Content rating")
+                    typescale: MD.Token.typescale.title_medium
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Repeater {
+                        model: ratingListQuery.ratings
+                        delegate: MD.FilterChip {
+                            required property var modelData
+                            checkable: false
+                            text: modelData
+                            checked: (root.skipContentRatings || []).indexOf(modelData) < 0
+                            onClicked: root.toggleSkipRating(modelData)
+                        }
+                    }
+                }
+            }
+
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
@@ -153,6 +190,7 @@ MD.Dialog {
             width: ListView.view.width
             supportedTypes: root.supportedTypes
             allTags: tagListQuery.tags
+            allContentRatings: ratingListQuery.ratings
         }
 
         section.property: "group"

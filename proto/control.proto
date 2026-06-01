@@ -66,6 +66,7 @@ message Request {
     PluginInstallRequest      plugin_install = 46;
     PluginListRequest         plugin_list = 47;
     TagListRequest            tag_list = 48;
+    ContentRatingListRequest  content_rating_list = 49;
   }
 }
 
@@ -119,6 +120,7 @@ message Response {
     PluginInstallResponse      plugin_install = 46;
     PluginListResponse         plugin_list = 47;
     TagListResponse            tag_list = 48;
+    ContentRatingListResponse  content_rating_list = 49;
   }
 }
 
@@ -349,6 +351,9 @@ message WallpaperListRequest {
   // Quick tag filter (independent of the structured rules): keep only
   // wallpapers having any of these tags. Empty = no constraint (all).
   repeated string filter_tags = 10;
+  // Content ratings to exclude (quick toggles, like skip_types). An
+  // entry whose `content_rating` is listed here is dropped.
+  repeated string skip_content_ratings = 11;
 }
 message WallpaperListResponse {
   repeated WallpaperEntry wallpapers = 1;
@@ -815,6 +820,9 @@ message GlobalSettings {
   // Quick tag filter (independent of the rules): show only wallpapers
   // having any of these tags. Empty = all. Persisted across restarts.
   repeated string wallpaper_filter_tags = 13;
+
+  // Content ratings hidden by the browser's quick toggles. Persisted.
+  repeated string wallpaper_skip_content_ratings = 14;
 }
 
 // When to pause the wallpaper based on window state on the same
@@ -1029,4 +1037,10 @@ message PluginListResponse {
 message TagListRequest {}
 message TagListResponse {
   repeated string tags = 1;
+}
+
+// All distinct content-rating values currently in the library DB.
+message ContentRatingListRequest {}
+message ContentRatingListResponse {
+  repeated string ratings = 1;
 }

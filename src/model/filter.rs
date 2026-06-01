@@ -133,6 +133,16 @@ pub fn wallpaper_filter_to_condition(filter: &pb::WallpaperFilterRule) -> Option
             ),
             _ => None,
         },
+        pb::WallpaperFilterType::ContentRating => match filter.payload.as_ref() {
+            Some(Payload::StringFilter(f)) => string_condition_to_condition(
+                || Expr::col((item::Entity, item::Column::ContentRating)),
+                pb::StringCondition::try_from(f.condition)
+                    .unwrap_or(pb::StringCondition::Unspecified),
+                &f.value,
+                false,
+            ),
+            _ => None,
+        },
         pb::WallpaperFilterType::Tag => match filter.payload.as_ref() {
             Some(Payload::TagFilter(f)) => tag_list_condition_to_condition(
                 &f.values,

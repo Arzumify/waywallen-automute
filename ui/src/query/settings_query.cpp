@@ -85,6 +85,11 @@ auto global_to_map(const proto::GlobalSettings& g) -> QVariantMap {
         wallpaper_filter_tags.append(t);
     }
     m[u"wallpaperFilterTags"_s] = wallpaper_filter_tags;
+    QStringList wallpaper_skip_content_ratings;
+    for (const auto& r : g.wallpaperSkipContentRatings()) {
+        wallpaper_skip_content_ratings.append(r);
+    }
+    m[u"wallpaperSkipContentRatings"_s] = wallpaper_skip_content_ratings;
     return m;
 }
 
@@ -146,6 +151,13 @@ auto map_to_global(const QVariantMap& m) -> proto::GlobalSettings {
             tags.append(v.toString());
         }
         g.setWallpaperFilterTags(tags);
+    }
+    if (m.contains(u"wallpaperSkipContentRatings"_s)) {
+        QStringList ratings;
+        for (const auto& v : m.value(u"wallpaperSkipContentRatings"_s).toList()) {
+            ratings.append(v.toString());
+        }
+        g.setWallpaperSkipContentRatings(ratings);
     }
     return g;
 }

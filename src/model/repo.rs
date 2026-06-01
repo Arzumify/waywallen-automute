@@ -812,6 +812,21 @@ pub async fn list_tags(db: &DatabaseConnection) -> Result<Vec<tag::Model>> {
         .context("select tags")
 }
 
+/// Distinct non-null `content_rating` values across all items, ascending.
+pub async fn list_content_ratings(db: &DatabaseConnection) -> Result<Vec<String>> {
+    let rows: Vec<Option<String>> = item::Entity::find()
+        .select_only()
+        .column(item::Column::ContentRating)
+        .distinct()
+        .filter(item::Column::ContentRating.is_not_null())
+        .order_by_asc(item::Column::ContentRating)
+        .into_tuple()
+        .all(db)
+        .await
+        .context("select distinct content_rating")?;
+    Ok(rows.into_iter().flatten().collect())
+}
+
 pub async fn list_items_by_tag(db: &DatabaseConnection, tag_id: i64) -> Result<Vec<item::Model>> {
     item::Entity::find()
         .inner_join(item_tag::Entity)

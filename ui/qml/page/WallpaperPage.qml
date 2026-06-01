@@ -154,6 +154,7 @@ MD.Page {
             if (!root._quickFiltersSeeded) {
                 wallpaperQuery.skipTypes = global.wallpaperSkipTypes || [];
                 wallpaperQuery.filterTags = global.wallpaperFilterTags || [];
+                wallpaperQuery.skipContentRatings = global.wallpaperSkipContentRatings || [];
                 root._quickFiltersSeeded = true;
             }
             wallpaperFilterModel.replaceState(
@@ -226,6 +227,17 @@ MD.Page {
         onApplyFilterTags: function (tags) {
             wallpaperQuery.filterTags = tags;
             root._persistGlobalChange(g => { g.wallpaperFilterTags = tags; });
+        }
+        skipContentRatings: wallpaperQuery.skipContentRatings
+        onToggleSkipRating: function (rating) {
+            const next = (wallpaperQuery.skipContentRatings || []).slice();
+            const i = next.indexOf(rating);
+            if (i >= 0)
+                next.splice(i, 1);
+            else
+                next.push(rating);
+            wallpaperQuery.skipContentRatings = next;
+            root._persistGlobalChange(g => { g.wallpaperSkipContentRatings = next; });
         }
     }
 

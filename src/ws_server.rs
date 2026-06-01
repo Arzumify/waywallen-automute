@@ -452,6 +452,7 @@ fn global_to_pb(g: &crate::settings::GlobalSettings) -> pb::GlobalSettings {
         rotation_secs: g.rotation_secs,
         wallpaper_skip_types: g.wallpaper_skip_types.clone(),
         wallpaper_filter_tags: g.wallpaper_filter_tags.clone(),
+        wallpaper_skip_content_ratings: g.wallpaper_skip_content_ratings.clone(),
     }
 }
 
@@ -845,6 +846,11 @@ async fn dispatch_inner(
             Res::TagList(pb::TagListResponse { tags })
         }
 
+        Req::ContentRatingList(_) => {
+            let ratings = repo::list_content_ratings(&state.db).await?;
+            Res::ContentRatingList(pb::ContentRatingListResponse { ratings })
+        }
+
         Req::WallpaperList(r) => {
             log::info!(
                 "WallpaperList: page={} page_size={} wp_type={:?} filters={} search={:?}",
@@ -916,6 +922,27 @@ async fn dispatch_inner(
                         pb::WallpaperTagFilter {
                             values: r.filter_tags.clone(),
                             condition: pb::StringCondition::Is as i32,
+                        },
+                    )),
+                });
+            }
+
+            // Quick content-rating toggles: drop the unselected ratings,
+            // each as its own AND-ed group.
+            for rating in &r.skip_content_ratings {
+                let next_group = filters_with_search
+                    .iter()
+                    .map(|f| f.group)
+                    .max()
+                    .map(|g| g + 1)
+                    .unwrap_or(0);
+                filters_with_search.push(pb::WallpaperFilterRule {
+                    r#type: pb::WallpaperFilterType::ContentRating as i32,
+                    group: next_group,
+                    payload: Some(pb::wallpaper_filter_rule::Payload::StringFilter(
+                        pb::WallpaperStringFilter {
+                            value: rating.clone(),
+                            condition: pb::StringCondition::IsNot as i32,
                         },
                     )),
                 });
@@ -1534,6 +1561,8 @@ async fn dispatch_inner(
                         WallpaperSortRuleState::vec_from_pb(&g.wallpaper_sorts);
                     s.global.wallpaper_skip_types = g.wallpaper_skip_types.clone();
                     s.global.wallpaper_filter_tags = g.wallpaper_filter_tags.clone();
+                    s.global.wallpaper_skip_content_ratings =
+                        g.wallpaper_skip_content_ratings.clone();
                     if let Some(ld) = g.layout_defaults.as_ref() {
                         if let Some(fm) = fillmode_from_pb(ld.fillmode) {
                             s.global.layout.fillmode = fm;

@@ -32,4 +32,26 @@ private:
     QStringList m_tags;
 };
 
+// All distinct content-rating values in the library DB. Feeds the
+// content-rating filter picker / quick toggles.
+export class ContentRatingListQuery : public Query,
+                                      public QueryExtra<control::v1::Response, ContentRatingListQuery> {
+    Q_OBJECT
+    QML_ELEMENT
+
+    Q_PROPERTY(QStringList ratings READ ratings NOTIFY ratingsChanged FINAL)
+
+public:
+    ContentRatingListQuery(QObject* parent = nullptr);
+
+    auto ratings() const -> const QStringList&;
+
+    void reload() override;
+
+    Q_SIGNAL void ratingsChanged();
+
+private:
+    QStringList m_ratings;
+};
+
 } // namespace waywallen

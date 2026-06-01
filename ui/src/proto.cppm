@@ -81,6 +81,8 @@ using proto::PluginListResponse;
 
 using proto::TagListRequest;
 using proto::TagListResponse;
+using proto::ContentRatingListRequest;
+using proto::ContentRatingListResponse;
 
 using proto::LibraryInstance;
 using proto::LibraryListRequest;

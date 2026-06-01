@@ -11,6 +11,7 @@ MD.ItemDelegate {
     required property int index
     property var supportedTypes: []
     property var allTags: []
+    property var allContentRatings: []
     property WC.wallpaperStringFilter emptyStringFilter
     property WC.wallpaperIntFilter emptyIntFilter
     property WC.wallpaperTagFilter emptyTagFilter
@@ -23,7 +24,8 @@ MD.ItemDelegate {
         { name: qsTr("Width"),          value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_WIDTH,   kind: "int"     },
         { name: qsTr("Height"),         value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_HEIGHT,  kind: "int"     },
         { name: qsTr("Size"),           value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_SIZE,    kind: "int"     },
-        { name: qsTr("Tag"),            value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_TAG,     kind: "tag"     }
+        { name: qsTr("Tag"),            value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_TAG,     kind: "tag"     },
+        { name: qsTr("Content rating"), value: WC.WallpaperFilterType.WALLPAPER_FILTER_TYPE_CONTENT_RATING, kind: "rating" }
     ]
 
     readonly property var currentOption: typeOptions.find(e => e.value === root.model.type) || null
@@ -39,6 +41,8 @@ MD.ItemDelegate {
             return intSpec;
         if (currentOption.kind === "tag")
             return tagSpec;
+        if (currentOption.kind === "rating")
+            return ratingSpec;
         return emptySpec;
     }
 
@@ -47,6 +51,7 @@ MD.ItemDelegate {
         switch (option.kind) {
         case "string":
         case "wp_type":
+        case "rating":
             root.model.stringFilter = emptyStringFilter;
             break;
         case "int":
@@ -76,6 +81,11 @@ MD.ItemDelegate {
         filter: root.currentOption && root.currentOption.kind === "tag" ? root.model : null
         allTags: root.allTags
         availableWidth: chipFlow.width
+    }
+    W.ContentRatingFilter {
+        id: ratingSpec
+        filter: root.currentOption && root.currentOption.kind === "rating" ? root.model : null
+        allRatings: root.allContentRatings
     }
     W.EmptyFilter { id: emptySpec }
 

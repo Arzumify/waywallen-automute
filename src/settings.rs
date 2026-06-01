@@ -203,6 +203,10 @@ pub struct GlobalSettings {
     /// Empty = no constraint.
     #[serde(default)]
     pub wallpaper_filter_tags: Vec<String>,
+
+    /// Content ratings hidden by the browser's quick toggles.
+    #[serde(default)]
+    pub wallpaper_skip_content_ratings: Vec<String>,
 }
 
 impl Default for GlobalSettings {
@@ -217,6 +221,7 @@ impl Default for GlobalSettings {
             wallpaper_sorts: Vec::new(),
             wallpaper_skip_types: Vec::new(),
             wallpaper_filter_tags: Vec::new(),
+            wallpaper_skip_content_ratings: Vec::new(),
         }
     }
 }
@@ -258,6 +263,20 @@ impl GlobalSettings {
                     },
                 )),
             });
+            next_group += 1;
+        }
+        for rating in &self.wallpaper_skip_content_ratings {
+            filters.push(pb::WallpaperFilterRule {
+                r#type: pb::WallpaperFilterType::ContentRating as i32,
+                group: next_group,
+                payload: Some(pb::wallpaper_filter_rule::Payload::StringFilter(
+                    pb::WallpaperStringFilter {
+                        value: rating.clone(),
+                        condition: pb::StringCondition::IsNot as i32,
+                    },
+                )),
+            });
+            next_group += 1;
         }
         (filters, logics)
     }
