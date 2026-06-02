@@ -143,7 +143,6 @@ set(QML_FILES
   qml/component/filter/EmptyFilter.qml
   qml/component/filter/WallpaperFilter.qml
   qml/component/settings/SettingField.qml
-  qml/component/settings/PluginSettingsPopup.qml
   qml/dialog/DaemonNotRunDialog.qml
   qml/dialog/WallpaperFilterDialog.qml
   qml/page/WallpaperPage.qml
@@ -155,6 +154,7 @@ set(QML_FILES
   qml/page/SourceManagePage.qml
   qml/page/AddLibraryPage.qml
   qml/page/AboutPage.qml
+  qml/page/PluginSettingsPage.qml
 )
 set(RESOURCES
   assets/waywallen-ui.svg

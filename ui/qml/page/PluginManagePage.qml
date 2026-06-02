@@ -7,6 +7,7 @@ import waywallen.ui as W
 MD.Page {
     id: root
     title: 'Plugins'
+    scrolling: !m_flick.atYBeginning
 
     actions: [
         MD.Action {

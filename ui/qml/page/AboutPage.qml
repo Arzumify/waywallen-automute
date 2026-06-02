@@ -5,6 +5,7 @@ import Qcm.Material as MD
 
 MD.Page {
     id: root
+    bottomPadding: 24
 
     ColumnLayout {
         anchors.centerIn: parent

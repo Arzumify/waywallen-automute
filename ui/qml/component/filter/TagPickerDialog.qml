@@ -30,6 +30,32 @@ MD.Dialog {
         control.pending = next;
     }
 
+    // True when the pending selection actually differs from what was
+    // seeded on open (order-independent). Reset/Apply only make sense then.
+    function _hasChanges() {
+        const a = control.pending || [];
+        const b = control.selected || [];
+        if (a.length !== b.length)
+            return true;
+        const as = a.slice().sort();
+        const bs = b.slice().sort();
+        for (let i = 0; i < as.length; ++i)
+            if (as[i] !== bs[i])
+                return true;
+        return false;
+    }
+
+    // Gate Reset/Apply on whether there are pending changes. Bind directly
+    // on the standard buttons the dialog builds for its button box.
+    Component.onCompleted: {
+        const apply = control.standardButton(T.Dialog.Apply);
+        if (apply)
+            apply.enabled = Qt.binding(control._hasChanges);
+        const reset = control.standardButton(T.Dialog.Reset);
+        if (reset)
+            reset.enabled = Qt.binding(control._hasChanges);
+    }
+
     onAboutToShow: control.pending = (control.selected || []).slice()
     onApplied: {
         control.commit(control.pending);

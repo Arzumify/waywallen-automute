@@ -78,23 +78,6 @@ MD.Page {
         }
     }
 
-    Connections {
-        target: settingsQuery
-        function onPluginsChanged() {
-            if (pluginSettingsPopup.opened) {
-                const p = settingsQuery.plugins[pluginSettingsPopup.pluginName];
-                pluginSettingsPopup.syncCurrent(p);
-            }
-        }
-    }
-
-    W.PluginSettingsPopup {
-        id: pluginSettingsPopup
-        pluginName: ""
-        schemaList: []
-        onResetRequested: settingsQuery.reload()
-    }
-
     Component.onCompleted: {
         if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready)
             reloadAll();
@@ -319,14 +302,18 @@ MD.Page {
                                     visible: componentItem.hasSettings
                                     icon.name: MD.Token.icon.settings
                                     onClicked: {
-                                        pluginSettingsPopup.pluginName = componentItem.modelData.name;
-                                        pluginSettingsPopup.schemaList = componentItem.modelData.settings || [];
-                                        pluginSettingsPopup.allCurrentPlugins = settingsQuery.plugins || ({});
-                                        pluginSettingsPopup.currentGlobal = settingsQuery.global || ({});
-                                        const p = settingsQuery.plugins ? settingsQuery.plugins[componentItem.modelData.name] : undefined;
-                                        pluginSettingsPopup.currentValues = p || ({});
-                                        pluginSettingsPopup.pendingValues = ({});
-                                        pluginSettingsPopup.open();
+                                        const name = componentItem.modelData.name;
+                                        const p = settingsQuery.plugins ? settingsQuery.plugins[name] : undefined;
+                                        MD.Util.showPopup('waywallen.ui/PagePopup', {
+                                            source: 'waywallen.ui/PluginSettingsPage',
+                                            props: {
+                                                pluginName: name,
+                                                schemaList: componentItem.modelData.settings || [],
+                                                allCurrentPlugins: settingsQuery.plugins || ({}),
+                                                currentGlobal: settingsQuery.global || ({}),
+                                                currentValues: p || ({})
+                                            }
+                                        }, root);
                                     }
                                 }
                             }

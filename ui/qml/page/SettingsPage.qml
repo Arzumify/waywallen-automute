@@ -130,6 +130,48 @@ MD.Page {
             width: m_flick.contentWidth
             spacing: 12
 
+            // ---- General (UI-local, persisted via QSettings) ----------------
+            SectionPane {
+                contentItem: ColumnLayout {
+                    spacing: 12
+
+                    SectionTitle { text: qsTr("General") }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            MD.Text {
+                                text: qsTr("Auto-expand sidebar")
+                                typescale: MD.Token.typescale.body_medium
+                                color: MD.Token.color.on_surface
+                            }
+                            MD.Text {
+                                text: qsTr("Expand or collapse the sidebar with the window size.")
+                                typescale: MD.Token.typescale.body_small
+                                color: MD.Token.color.on_surface_variant
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        MD.Switch {
+                            id: m_sidebar_auto_expand
+                            onToggled: W.Global.sidebarAutoExpand = checked
+                        }
+                        Binding {
+                            target: m_sidebar_auto_expand
+                            property: "checked"
+                            value: W.Global.sidebarAutoExpand
+                        }
+                    }
+                }
+            }
+
             // ---- Auto-pause -------------------------------------------------
             SectionPane {
                 contentItem: ColumnLayout {
@@ -314,8 +356,6 @@ MD.Page {
                         Layout.fillWidth: true
                         spacing: 4
 
-                        FieldLabel { text: qsTr("Interval") }
-
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
@@ -324,6 +364,7 @@ MD.Page {
                                 id: m_rot_field
                                 Layout.preferredWidth: 120
                                 mdState.dense: true
+                                placeholderText: qsTr("Interval")
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 0 }
                                 onEditingFinished: root._mut(g => {
@@ -345,48 +386,6 @@ MD.Page {
                                 typescale: MD.Token.typescale.body_medium
                                 color: MD.Token.color.on_surface_variant
                             }
-                        }
-                    }
-                }
-            }
-
-            // ---- Interface (UI-local, persisted via QSettings) -------------
-            SectionPane {
-                contentItem: ColumnLayout {
-                    spacing: 12
-
-                    SectionTitle { text: qsTr("Interface") }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            MD.Text {
-                                text: qsTr("Auto-expand sidebar")
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                            }
-                            MD.Text {
-                                text: qsTr("Expand or collapse the sidebar with the window size. Turn off to control it manually with the menu button.")
-                                typescale: MD.Token.typescale.body_small
-                                color: MD.Token.color.on_surface_variant
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
-                        }
-
-                        MD.Switch {
-                            id: m_sidebar_auto_expand
-                            onToggled: W.Global.sidebarAutoExpand = checked
-                        }
-                        Binding {
-                            target: m_sidebar_auto_expand
-                            property: "checked"
-                            value: W.Global.sidebarAutoExpand
                         }
                     }
                 }
