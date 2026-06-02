@@ -1,10 +1,20 @@
 pragma Singleton
+import QtCore
 import QtQuick
 import Qcm.Material as MD
 
 // App-wide singleton state and derived theming.
 QtObject {
     id: root
+
+    // Persisted UI preferences (QSettings, category "general").
+    property alias sidebarAutoExpand: m_settings.sidebarAutoExpand
+
+    readonly property Settings _settings: Settings {
+        id: m_settings
+        category: "general"
+        property bool sidebarAutoExpand: true
+    }
 
     // Per-vendor Material color schemes, seeded from each GPU vendor's brand
     // color and tracking the app theme mode, so vendor chips stay legible in

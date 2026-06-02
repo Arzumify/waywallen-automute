@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 pragma ValueTypeBehavior: Assertable
+import QtCore
 import QtQuick
 import QtQml
 import QtQuick.Window
@@ -19,12 +20,17 @@ MD.ApplicationWindow {
 
     color: MD.MProp.backgroundColor
     height: 600
-    visible: m_uiVisible
+    visible: true
     width: 900
     title: "waywallen"
 
-    property bool m_uiVisible: false
-    property bool m_saveArmed: false
+    // Persist the window size across runs. Wayland doesn't let clients
+    // restore their own position, so only width/height are stored.
+    Settings {
+        category: "window"
+        property alias width: win.width
+        property alias height: win.height
+    }
 
     W.HealthQuery {
         id: healthQuery
@@ -36,64 +42,6 @@ MD.ApplicationWindow {
             healthQuery.reload();
         }
     }
-
-    readonly property bool sidebarAutoExpand: W.UiSettings.sidebarAutoExpand
-
-    Timer {
-        id: m_sizeFlush
-        interval: 500
-        repeat: false
-        onTriggered: {
-            if (W.Util.tilingWm)
-                return;
-            if (!W.UiSettings.saveWindowSize)
-                return;
-            W.UiSettings.windowWidth = Math.round(win.width);
-            W.UiSettings.windowHeight = Math.round(win.height);
-        }
-    }
-
-    function m_saveSize() {
-        if (W.Util.tilingWm)
-            return;
-        if (!m_saveArmed)
-            return;
-        if (!W.UiSettings.saveWindowSize)
-            return;
-        m_sizeFlush.restart();
-    }
-
-    function m_reveal() {
-        if (win.m_uiVisible)
-            return;
-        if (!W.Util.tilingWm && W.UiSettings.saveWindowSize && W.UiSettings.windowWidth > 0 && W.UiSettings.windowHeight > 0) {
-            win.width = W.UiSettings.windowWidth;
-            win.height = W.UiSettings.windowHeight;
-        }
-        win.m_uiVisible = true;
-        m_armTimer.restart();
-    }
-
-    Timer {
-        id: m_armTimer
-        interval: 600
-        repeat: false
-        onTriggered: win.m_saveArmed = true
-    }
-
-    function syncSidebar() {
-        const it = m_drawer_loader.item;
-        if (!it)
-            return;
-        if (win.sidebarAutoExpand)
-            it.expanded = it.useEmbed;
-        else
-            it.expanded = W.UiSettings.sidebarExpanded;
-    }
-
-    onWidthChanged: m_saveSize()
-    onHeightChanged: m_saveSize()
-    onSidebarAutoExpandChanged: syncSidebar()
 
     property int currentPage: 0
 
@@ -126,14 +74,12 @@ MD.ApplicationWindow {
 
     Component.onCompleted: {
         currentPageChanged();
-        win.m_reveal();
         // Level-check for the case where the daemon is already Ready
         // before this window finishes constructing (UI launched
         // standalone against a running daemon, page reload, etc.)
         // — `daemonReady` is edge-triggered and won't fire then.
-        if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready) {
+        if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready)
             healthQuery.reload();
-        }
     }
 
     MD.SnakeView {
@@ -176,124 +122,86 @@ MD.ApplicationWindow {
             Layout.fillHeight: true
             spacing: 0
 
-            // --- Sidebar drawer (expanded mode) ---
+            // --- Navigation rail (collapses to 96dp; auto-expands when
+            // the window is wide enough to embed) ---
             Loader {
                 id: m_drawer_loader
                 Layout.fillHeight: true
-                Layout.preferredWidth: item ? (item.expanded ? item.expandedWidth : item.collapsedWidth) : -1
-
-                Behavior on Layout.preferredWidth {
-                    NumberAnimation {
-                        duration: MD.Token.duration.short4
-                    }
-                }
-
                 active: !win.isCompact
                 visible: active
 
-                sourceComponent: MD.StandardDrawer {
-                    id: m_drawer
+                sourceComponent: MD.NavigationRail {
+                    id: m_rail
                     model: win.pageModel
                     currentIndex: win.currentPage
 
-                    onUseEmbedChanged: Qt.callLater(win.syncSidebar)
-                    Component.onCompleted: win.syncSidebar()
+                    autoExpand: W.Global.sidebarAutoExpand
+                    // The rail only re-syncs `expanded` on window-class
+                    // changes; apply a runtime toggle of the setting at once.
+                    onAutoExpandChanged: if (autoExpand) expanded = useEmbed
 
                     onClicked: function (model) {
                         win.currentPage = model.index;
                     }
 
-                    header: ColumnLayout {
-                        spacing: 0
+                    // Logo + a menu-toggle button (the rail's default header
+                    // is just the toggle; we add branding alongside it).
+                    header: Item {
+                        implicitWidth: m_rail.useLarge ? m_rail.expandedWidth : m_rail.collapsedWidth
+                        implicitHeight: m_logo.y + m_logo.height + 12
 
-                        MD.IconButton {
-                            Layout.alignment: Qt.AlignHCenter
-                            Layout.topMargin: 16
-                            Layout.bottomMargin: 8
-                            icon.name: MD.Token.icon.chevron_right
-                            onClicked: {
-                                m_drawer.expanded = true;
-                                if (!win.sidebarAutoExpand)
-                                    W.UiSettings.sidebarExpanded = true;
-                            }
-                        }
+                        MD.StandardIconButton {
+                            id: m_menu_btn
+                            x: m_rail.useLarge ? (32 - (width - 24) / 2) : (m_rail.collapsedWidth - width) / 2
+                            y: 4
+                            icon.name: m_rail.useLarge ? MD.Token.icon.menu_open : MD.Token.icon.menu
+                            onClicked: m_rail.toggle()
 
-                        MD.Divider {
-                            Layout.leftMargin: 12
-                            Layout.rightMargin: 12
-                            Layout.fillWidth: true
-                        }
-                    }
-
-                    drawerHeader: ColumnLayout {
-                        spacing: 0
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 16
-                            Layout.rightMargin: 16
-                            Layout.topMargin: 16
-                            Layout.bottomMargin: 8
-                            spacing: 12
-
-                            Image {
-                                Layout.preferredWidth: 32
-                                Layout.preferredHeight: 32
-                                source: "qrc:/waywallen/ui/assets/waywallen-ui.svg"
-                                fillMode: Image.PreserveAspectFit
-                                sourceSize.width: 64
-                                sourceSize.height: 64
-                            }
-
-                            MD.Label {
-                                Layout.fillWidth: true
-                                text: "waywallen"
-                                typescale: MD.Token.typescale.title_large
-                            }
-
-                            MD.IconButton {
-                                Layout.alignment: Qt.AlignVCenter
-                                icon.name: MD.Token.icon.chevron_left
-                                onClicked: {
-                                    m_drawer.expanded = false;
-                                    if (!win.sidebarAutoExpand)
-                                        W.UiSettings.sidebarExpanded = false;
+                            Behavior on x {
+                                NumberAnimation {
+                                    duration: MD.Token.duration.long2
+                                    easing: MD.Token.easing.emphasized
                                 }
                             }
                         }
 
-                        MD.Divider {
-                            Layout.leftMargin: 28
-                            Layout.rightMargin: 28
-                            Layout.fillWidth: true
+                        Image {
+                            id: m_logo
+                            width: 32
+                            height: 32
+                            x: m_rail.useLarge ? 32 : (m_rail.collapsedWidth - width) / 2
+                            y: m_menu_btn.y + m_menu_btn.height + 16
+                            source: "qrc:/waywallen/ui/assets/waywallen-ui.svg"
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.width: 64
+                            sourceSize.height: 64
+
+                            Behavior on x {
+                                NumberAnimation {
+                                    duration: MD.Token.duration.long2
+                                    easing: MD.Token.easing.emphasized
+                                }
+                            }
+                        }
+
+                        MD.Label {
+                            visible: m_rail.useLarge
+                            anchors.left: m_logo.right
+                            anchors.leftMargin: 12
+                            anchors.verticalCenter: m_logo.verticalCenter
+                            text: "waywallen"
+                            typescale: MD.Token.typescale.title_large
                         }
                     }
 
-                    drawerContent: Item {
-                        implicitHeight: children[0].implicitHeight
-                        implicitWidth: children[0].implicitWidth
-
-                        ColumnLayout {
-                            width: parent.width
-                            spacing: 0
-
-                            MD.Divider {
-                                Layout.leftMargin: 28
-                                Layout.rightMargin: 28
-                                Layout.fillWidth: true
-                            }
-
-                            MD.DrawerItem {
-                                Layout.fillWidth: true
-                                Layout.leftMargin: 12
-                                Layout.rightMargin: 12
-                                icon.name: MD.Token.icon.info
-                                text: "About"
-                                onClicked: MD.Util.showPopup('waywallen.ui/PagePopup', {
-                                    source: 'waywallen.ui/AboutPage'
-                                }, win)
-                            }
-                        }
+                    footer: MD.RailItem {
+                        expand: m_rail.useLarge
+                        checked: false
+                        icon.name: MD.Token.icon.info
+                        text: "About"
+                        onClicked: MD.Util.showPopup('waywallen.ui/PagePopup', {
+                            source: 'waywallen.ui/AboutPage'
+                        }, win)
                     }
                 }
             }

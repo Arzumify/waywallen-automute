@@ -350,48 +350,12 @@ MD.Page {
                 }
             }
 
+            // ---- Interface (UI-local, persisted via QSettings) -------------
             SectionPane {
                 contentItem: ColumnLayout {
                     spacing: 12
 
                     SectionTitle { text: qsTr("Interface") }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        enabled: !W.Util.tilingWm
-                        opacity: enabled ? 1.0 : 0.6
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            MD.Text {
-                                text: qsTr("Remember window size")
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                            }
-                            MD.Text {
-                                text: W.Util.tilingWm
-                                    ? qsTr("Not available on tiling compositors; the window manager controls the size")
-                                    : qsTr("Reopen the window at the last size you set")
-                                typescale: MD.Token.typescale.body_small
-                                color: MD.Token.color.on_surface_variant
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
-                        }
-
-                        MD.Switch {
-                            id: m_save_window_size
-                            onToggled: W.UiSettings.saveWindowSize = checked
-                        }
-                        Binding {
-                            target: m_save_window_size
-                            property: "checked"
-                            value: W.UiSettings.saveWindowSize
-                        }
-                    }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -407,7 +371,7 @@ MD.Page {
                                 color: MD.Token.color.on_surface
                             }
                             MD.Text {
-                                text: qsTr("Expand or collapse the sidebar with the window size. Turn off to control it manually with the arrow.")
+                                text: qsTr("Expand or collapse the sidebar with the window size. Turn off to control it manually with the menu button.")
                                 typescale: MD.Token.typescale.body_small
                                 color: MD.Token.color.on_surface_variant
                                 wrapMode: Text.WordWrap
@@ -417,12 +381,12 @@ MD.Page {
 
                         MD.Switch {
                             id: m_sidebar_auto_expand
-                            onToggled: W.UiSettings.sidebarAutoExpand = checked
+                            onToggled: W.Global.sidebarAutoExpand = checked
                         }
                         Binding {
                             target: m_sidebar_auto_expand
                             property: "checked"
-                            value: W.UiSettings.sidebarAutoExpand
+                            value: W.Global.sidebarAutoExpand
                         }
                     }
                 }

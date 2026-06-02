@@ -37,7 +37,6 @@ public:
 
     Q_PROPERTY(Desktop desktop READ desktop CONSTANT FINAL)
     Q_PROPERTY(bool supportsDisplayRename READ supportsDisplayRename CONSTANT FINAL)
-    Q_PROPERTY(bool tilingWm READ tilingWm CONSTANT FINAL)
 
     explicit Util(QObject* parent);
     ~Util() override;
@@ -48,7 +47,6 @@ public:
 
     Desktop     desktop() const;
     bool        supportsDisplayRename() const;
-    bool        tilingWm() const;
 
     Q_INVOKABLE QString bbcodeToHtml(const QString& src) const;
 
