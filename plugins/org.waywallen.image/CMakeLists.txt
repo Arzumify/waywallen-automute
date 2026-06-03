@@ -11,7 +11,7 @@ add_executable(waywallen-image-renderer
     src/av_image.cpp
 )
 set_target_properties(waywallen-image-renderer PROPERTIES
-    INSTALL_RPATH "${WAYWALLEN_PLUGIN_BIN_RPATH}"
+    INSTALL_RPATH "${WAYWALLEN_BIN_RPATH}"
 )
 target_compile_features(waywallen-image-renderer PRIVATE cxx_std_20)
 set_target_properties(waywallen-image-renderer PROPERTIES CXX_SCAN_FOR_MODULES ON)
@@ -36,7 +36,7 @@ target_link_libraries(waywallen-image-renderer
 set(_IMAGE_PLUGIN_DIR ${CMAKE_INSTALL_DATADIR}/waywallen/plugins/org.waywallen.image)
 
 install(TARGETS waywallen-image-renderer
-    RUNTIME DESTINATION ${_IMAGE_PLUGIN_DIR}/bin
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 install(FILES

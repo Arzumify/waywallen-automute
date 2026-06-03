@@ -14,7 +14,7 @@ version = "0.1.8"
 lua = "video.lua"
 
 [renderers.waywallen-video]
-bin = "bin/waywallen-video-renderer"
+bin = "../../../../bin/waywallen-video-renderer"
 types = ["video"]
 priority = 100
 spawn_version = 5

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 project(waywallen
-    VERSION 0.1.7
+    VERSION 0.1.8
     LANGUAGES C CXX
     DESCRIPTION "waywallen: Rust daemon + Qt/QML UI + renderer subprocess plugins"
 )
@@ -18,10 +18,10 @@ set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 
 
 set(WAYWALLEN_LIB_RPATH "$ORIGIN")
+# All ELF binaries (daemon + renderer plugins) install to <prefix>/bin —
+# share/ ELF trips permission limits on some distros. $ORIGIN/../lib
+# reaches the shared libs in <prefix>/lib.
 set(WAYWALLEN_BIN_RPATH "$ORIGIN;$ORIGIN/../lib")
-# Renderer bins live under share/waywallen/plugins/<id>/bin (5 levels
-# below the install prefix); reach the shared libs in <prefix>/lib.
-set(WAYWALLEN_PLUGIN_BIN_RPATH "$ORIGIN;$ORIGIN/../../../../../lib")
 
 include(GNUInstallDirs)
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

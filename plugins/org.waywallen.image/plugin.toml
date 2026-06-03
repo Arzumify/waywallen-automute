@@ -9,7 +9,7 @@ version = "0.1.8"
 lua = "image.lua"
 
 [renderers.waywallen-image]
-bin = "bin/waywallen-image-renderer"
+bin = "../../../../bin/waywallen-image-renderer"
 types = ["image"]
 priority = 100
 spawn_version = 5

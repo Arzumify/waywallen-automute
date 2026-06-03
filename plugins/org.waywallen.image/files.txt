@@ -1,3 +1,3 @@
-bin/waywallen-image-renderer
+../../../../bin/waywallen-image-renderer
 image.lua
 plugin.toml
