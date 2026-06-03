@@ -809,7 +809,10 @@ async fn dispatch_inner(
                 .map(|def| {
                     renderer_def_to_pb(
                         def,
-                        plugin_versions.get(def.plugin_id.as_str()).copied().unwrap_or(""),
+                        plugin_versions
+                            .get(def.plugin_id.as_str())
+                            .copied()
+                            .unwrap_or(""),
                     )
                 })
                 .collect();

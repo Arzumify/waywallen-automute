@@ -117,10 +117,17 @@ if [[ ! -f "$CONDA_PREFIX/lib/cmake/Qt6Protobuf/Qt6ProtobufConfig.cmake" ]]; the
     cmake --install "$QTGRPC_BUILD"
 fi
 
+# Use ccache as the compiler launcher when available (speeds up CI rebuilds).
+CCACHE_ARGS=()
+if command -v ccache >/dev/null 2>&1; then
+    CCACHE_ARGS=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+fi
+
 # ---- 3. CMake configure ----
 step "CMake configure (daemon + UI + image/video renderer plugins)"
 cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" \
     -G Ninja \
+    "${CCACHE_ARGS[@]}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \
@@ -170,6 +177,7 @@ step "CMake configure: open-wallpaper-engine"
 # installed in step 4.
 cmake -S "$OWE_SRC" -B "$OWE_BUILD" \
     -G Ninja \
+    "${CCACHE_ARGS[@]}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \
@@ -186,7 +194,7 @@ cmake -S "$OWE_SRC" -B "$OWE_BUILD" \
 step "Compiling open-wallpaper-engine"
 cmake --build   "$OWE_BUILD" --parallel
 cmake --install "$OWE_BUILD"
-strip "$PLUGINS_DIR/org.waywallen.open-wallpaper-engine"/*.so
+strip "$INSTALL_DIR/bin/weweb"/*.so
 
 # # ---- 5. Fetch linuxdeploy / appimagetool (cached on first run under build/_tools) ----
 mkdir -p "$TOOLS_DIR"

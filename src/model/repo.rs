@@ -436,10 +436,7 @@ pub async fn load_entries(
         .into_iter()
         .filter_map(|it| {
             let lib = lib_path.get(&it.library_id)?;
-            let plugin = plugin_name
-                .get(&it.plugin_id)
-                .cloned()
-                .unwrap_or_default();
+            let plugin = plugin_name.get(&it.plugin_id).cloned().unwrap_or_default();
             Some(entry_from_item(it, lib, &plugin))
         })
         .collect())
