@@ -285,8 +285,8 @@ MD.Page {
         if (idx === sortIndex) {
             sortAsc = !sortAsc;
         } else {
+            // Switching key keeps the current asc/desc order.
             sortIndex = idx;
-            sortAsc = true;
         }
         applySort();
         _persistGlobalChange(g => { g.wallpaperSorts = [_buildSortRule()]; });
