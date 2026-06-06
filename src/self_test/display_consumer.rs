@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use ash::vk::{self, Handle};
-use waywallen_display_sys as ffi;
+use waywallen_display as ffi;
 
 use super::tests::render_loop::color_for;
 use super::vk::cmd;

@@ -1903,9 +1903,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.39.3"
+version = "0.39.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "721da970c312655cde9b4ffe0547f20a8494866a4af5ff51f18b7c633d0c870b"
+checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
 dependencies = [
  "memchr",
 ]
@@ -3462,33 +3462,27 @@ dependencies = [
  "toml",
  "uuid",
  "wayproto-gen",
- "waywallen-display-sys",
+ "waywallen-display",
  "zbus",
  "zip",
 ]
 
 [[package]]
-name = "waywallen-display-layer-shell"
-version = "0.1.0"
+name = "waywallen-display"
+version = "0.2.4"
+source = "git+https://github.com/waywallen/waywallen-display?rev=e9982a0fda97948765aa0fea96e3eab38221adbd#e9982a0fda97948765aa0fea96e3eab38221adbd"
 dependencies = [
  "anyhow",
+ "cc",
  "env_logger",
+ "libc",
  "log",
+ "pkg-config",
  "serde",
  "serde_json",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
- "waywallen",
-]
-
-[[package]]
-name = "waywallen-display-sys"
-version = "0.1.3"
-source = "git+https://github.com/waywallen/waywallen-display?rev=2c89c6b53b7b6fbe4c330b1a9a776bc54b898fa1#2c89c6b53b7b6fbe4c330b1a9a776bc54b898fa1"
-dependencies = [
- "cc",
- "pkg-config",
 ]
 
 [[package]]

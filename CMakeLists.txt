@@ -42,15 +42,50 @@ if(WAYWALLEN_BUILD_DAEMON)
     endif()
     corrosion_import_crate(
         MANIFEST_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-        CRATES        waywallen waywallen-display-layer-shell
+        CRATES        waywallen
         ${_waywallen_corrosion_extra}
     )
     install(IMPORTED_RUNTIME_ARTIFACTS
         waywallen
-        waywallen-display-layer-shell
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         COMPONENT Daemon
     )
+
+    find_program(CARGO cargo REQUIRED)
+    set(_waywallen_display_dir "${CMAKE_CURRENT_SOURCE_DIR}/../waywallen-display")
+    if(NOT EXISTS "${_waywallen_display_dir}/Cargo.toml")
+        message(FATAL_ERROR "waywallen-display Cargo.toml not found at ${_waywallen_display_dir}")
+    endif()
+
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+        set(_waywallen_display_cargo_profile "release")
+        set(_waywallen_display_cargo_profile_arg "--release")
+    else()
+        set(_waywallen_display_cargo_profile "debug")
+        set(_waywallen_display_cargo_profile_arg "")
+    endif()
+    set(_waywallen_layer_shell_bin
+        "${_waywallen_display_dir}/target/${_waywallen_display_cargo_profile}/waywallen-layer-shell")
+    set(_waywallen_display_cargo_args build --bin waywallen-layer-shell)
+    if(_waywallen_display_cargo_profile_arg)
+        list(APPEND _waywallen_display_cargo_args "${_waywallen_display_cargo_profile_arg}")
+    endif()
+    if(WAYWALLEN_CARGO_OFFLINE)
+        list(APPEND _waywallen_display_cargo_args --frozen)
+    endif()
+
+    add_custom_command(
+        OUTPUT "${_waywallen_layer_shell_bin}"
+        COMMAND ${CARGO} ${_waywallen_display_cargo_args}
+        WORKING_DIRECTORY "${_waywallen_display_dir}"
+        DEPENDS "${_waywallen_display_dir}/Cargo.toml"
+        COMMENT "Building waywallen-layer-shell"
+        VERBATIM)
+    add_custom_target(waywallen-layer-shell ALL
+        DEPENDS "${_waywallen_layer_shell_bin}")
+    install(PROGRAMS "${_waywallen_layer_shell_bin}"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        COMPONENT Daemon)
 endif()
 
 if(WAYWALLEN_BUILD_PLUGINS)

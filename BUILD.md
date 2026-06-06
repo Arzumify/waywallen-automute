@@ -28,7 +28,7 @@ This produces under `install/`:
 ```
 install/bin/
     waywallen                          # daemon (Rust)
-    waywallen-display-layer-shell      # wlroots adapter (Rust)
+    waywallen-layer-shell              # wlroots adapter (Rust)
     waywallen-ui                       # Qt/QML UI
 install/share/waywallen/plugins/
     org.waywallen.image/{plugin.toml, files.txt, image.lua, bin/waywallen-image-renderer}

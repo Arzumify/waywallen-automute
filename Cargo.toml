@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "tools/wayproto-gen", "displays/layer-shell"]
-default-members = [".", "displays/layer-shell"]
+members = [".", "tools/wayproto-gen"]
+default-members = ["."]
 
 [package]
 name = "waywallen"
@@ -48,7 +48,7 @@ sea-orm-migration = { version = "1.1", default-features = false, features = [
     "sqlx-sqlite",
 ] }
 
-waywallen-display-sys = { git = "https://github.com/waywallen/waywallen-display", rev = "2c89c6b53b7b6fbe4c330b1a9a776bc54b898fa1" }
+waywallen-display = { git = "https://github.com/waywallen/waywallen-display", rev = "e9982a0fda97948765aa0fea96e3eab38221adbd" }
 
 [dev-dependencies]
 tempfile = "3"

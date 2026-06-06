@@ -83,12 +83,12 @@ pub fn builtin_display_defs() -> Vec<DisplayDef> {
         spawn: SpawnMode::External,
     });
 
-    // waywallen-display-layer-shell — Wayland layer-shell wallpaper client.
+    // waywallen-layer-shell — Wayland layer-shell wallpaper client.
     // We look for the binary in the same directory as the daemon.
-    let mut layer_shell_bin = PathBuf::from("waywallen-display-layer-shell");
+    let mut layer_shell_bin = PathBuf::from("waywallen-layer-shell");
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let candidate = parent.join("waywallen-display-layer-shell");
+            let candidate = parent.join("waywallen-layer-shell");
             if candidate.exists() {
                 layer_shell_bin = candidate;
             }
