@@ -99,6 +99,7 @@ Q_SIGNALS:
                                  quint32        clientProtocolVersion,
                                  quint32        errorCode,
                                  const QString& reason);
+    void remoteDownloadProgress(const QString& id, int state, const QString& error);
 
 private:
     bool        m_scan_in_progress { false };

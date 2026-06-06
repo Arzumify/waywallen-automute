@@ -10,3 +10,4 @@ export import :query.health;
 export import :query.display;
 export import :query.gpu;
 export import :query.settings;
+export import :query.remote;

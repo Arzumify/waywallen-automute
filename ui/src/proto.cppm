@@ -69,6 +69,21 @@ using proto::DisplayLayoutSetResponse;
 using proto::DisplayRenameRequest;
 using proto::DisplayRenameResponse;
 
+using proto::RemoteAvailabilityRequest;
+using proto::RemoteAvailabilityResponse;
+using proto::RemoteItem;
+using proto::RemoteSearchRequest;
+using proto::RemoteSearchResponse;
+using proto::RemoteSortGadget::RemoteSort;
+using proto::RemoteDownloadRequest;
+using proto::RemoteDownloadResponse;
+using proto::RemoteDownloadProgress;
+using proto::RemoteDownloadStateGadget::RemoteDownloadState;
+using proto::RemoteUninstallRequest;
+using proto::RemoteUninstallResponse;
+using proto::RemoteDetailsRequest;
+using proto::RemoteDetailsResponse;
+
 using proto::GpuInfo;
 using proto::GpuListRequest;
 using proto::GpuListResponse;
