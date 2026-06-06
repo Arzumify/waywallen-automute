@@ -1,0 +1,139 @@
+module;
+#include "QExtra/macro_qt.hpp"
+
+#ifdef Q_MOC_RUN
+#    include "waywallen/query/remote_query.moc"
+#endif
+
+export module waywallen:query.remote;
+export import :query.query;
+export import :model.remote;
+
+namespace waywallen
+{
+
+export class RemoteAvailabilityQuery
+    : public Query,
+      public QueryExtra<control::v1::Response, RemoteAvailabilityQuery> {
+    Q_OBJECT
+    QML_ELEMENT
+
+    Q_PROPERTY(bool owned READ owned NOTIFY ownedChanged FINAL)
+    Q_PROPERTY(QString contentDir READ contentDir NOTIFY ownedChanged FINAL)
+
+public:
+    RemoteAvailabilityQuery(QObject* parent = nullptr);
+
+    auto owned() const -> bool;
+    auto contentDir() const -> const QString&;
+
+    void reload() override;
+
+    Q_SIGNAL void ownedChanged();
+
+private:
+    bool    m_owned { false };
+    QString m_content_dir;
+};
+
+export class RemoteSearchQuery
+    : public Query,
+      public QueryExtra<control::v1::Response, RemoteSearchQuery> {
+    Q_OBJECT
+    QML_ELEMENT
+
+    Q_PROPERTY(QString query READ query WRITE setQuery NOTIFY queryChanged FINAL)
+    Q_PROPERTY(int sort READ sort WRITE setSort NOTIFY sortChanged FINAL)
+    Q_PROPERTY(QStringList tags READ tags WRITE setTags NOTIFY tagsChanged FINAL)
+    Q_PROPERTY(waywallen::model::RemoteListModel* model READ model CONSTANT FINAL)
+    Q_PROPERTY(bool hasMore READ hasMore NOTIFY stateChanged FINAL)
+    Q_PROPERTY(QString errorText READ errorText NOTIFY stateChanged FINAL)
+
+public:
+    RemoteSearchQuery(QObject* parent = nullptr);
+
+    auto query() const -> const QString&;
+    void setQuery(const QString&);
+
+    auto sort() const -> int;
+    void setSort(int);
+
+    auto tags() const -> const QStringList&;
+    void setTags(const QStringList&);
+
+    auto model() const -> model::RemoteListModel*;
+    auto hasMore() const -> bool;
+    auto errorText() const -> const QString&;
+
+    void reload() override;
+    Q_INVOKABLE void loadMore();
+
+    Q_SIGNAL void queryChanged();
+    Q_SIGNAL void sortChanged();
+    Q_SIGNAL void tagsChanged();
+    Q_SIGNAL void stateChanged();
+
+private:
+    void fetchPage(quint32 page, bool append);
+
+    QString                    m_query;
+    int                        m_sort { 0 };
+    QStringList                m_tags;
+    model::RemoteListModel*  m_model;
+    bool                       m_has_more { false };
+    QString                    m_error;
+    quint32                    m_page { 1 };
+};
+
+export class RemoteDetailsQuery
+    : public Query,
+      public QueryExtra<control::v1::Response, RemoteDetailsQuery> {
+    Q_OBJECT
+    QML_ELEMENT
+
+    Q_PROPERTY(QString itemId READ itemId WRITE setItemId NOTIFY itemIdChanged FINAL)
+    Q_PROPERTY(QString description READ description NOTIFY loaded FINAL)
+    Q_PROPERTY(QString size READ size NOTIFY loaded FINAL)
+    Q_PROPERTY(QStringList tags READ tags NOTIFY loaded FINAL)
+
+public:
+    RemoteDetailsQuery(QObject* parent = nullptr);
+
+    auto itemId() const -> const QString&;
+    void setItemId(const QString&);
+    auto description() const -> const QString&;
+    auto size() const -> const QString&;
+    auto tags() const -> const QStringList&;
+
+    void reload() override;
+
+    Q_SIGNAL void itemIdChanged();
+    Q_SIGNAL void loaded();
+
+private:
+    QString     m_item_id;
+    QString     m_description;
+    QString     m_size;
+    QStringList m_tags;
+};
+
+export class RemoteDownloadQuery
+    : public Query,
+      public QueryExtra<control::v1::Response, RemoteDownloadQuery> {
+    Q_OBJECT
+    QML_ELEMENT
+
+public:
+    RemoteDownloadQuery(QObject* parent = nullptr);
+
+    void reload() override;
+    Q_INVOKABLE void start(const QString& id);
+    Q_INVOKABLE void uninstall(const QString& id);
+
+    Q_SIGNAL void accepted(const QString& id);
+    Q_SIGNAL void rejected(const QString& id, const QString& error);
+    Q_SIGNAL void uninstalled(const QString& id);
+    Q_SIGNAL void uninstallFailed(const QString& id, const QString& error);
+};
+
+}

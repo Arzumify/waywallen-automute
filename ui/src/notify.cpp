@@ -80,6 +80,11 @@ Notify::Notify(QObject* parent): QObject(parent) {
                                                    f.clientProtocolVersion(),
                                                    f.errorCode(),
                                                    f.reason());
+                } else if (evt.hasRemoteDownloadProgress()) {
+                    const auto& p = evt.remoteDownloadProgress();
+                    Q_EMIT remoteDownloadProgress(p.id_proto(),
+                                                    static_cast<int>(p.state()),
+                                                    p.error());
                 }
             },
             Qt::QueuedConnection);

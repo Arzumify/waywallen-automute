@@ -1235,6 +1235,34 @@ async fn dispatch_inner(
             Res::DisplayRename(pb::DisplayRenameResponse { display })
         }
 
+        Req::RemoteAvailability(_) => Res::RemoteAvailability(pb::RemoteAvailabilityResponse {
+            owned: false,
+            content_dir: String::new(),
+        }),
+
+        Req::RemoteSearch(_) => Res::RemoteSearch(pb::RemoteSearchResponse {
+            items: Vec::new(),
+            has_more: false,
+            error: String::new(),
+        }),
+
+        Req::RemoteDownload(_) => Res::RemoteDownload(pb::RemoteDownloadResponse {
+            accepted: false,
+            error: "no remote source plugin".into(),
+        }),
+
+        Req::RemoteUninstall(_) => Res::RemoteUninstall(pb::RemoteUninstallResponse {
+            removed: false,
+            error: "no remote source plugin".into(),
+        }),
+
+        Req::RemoteDetails(_) => Res::RemoteDetails(pb::RemoteDetailsResponse {
+            description: String::new(),
+            size: String::new(),
+            tags: Vec::new(),
+            error: String::new(),
+        }),
+
         Req::WallpaperApply(r) => {
             let entry = match r.wallpaper_id.parse::<i64>() {
                 Ok(iid) => repo::get_entry(&state.db, iid).await?,

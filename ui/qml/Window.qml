@@ -40,33 +40,36 @@ MD.ApplicationWindow {
         target: W.Notify
         function onDaemonReady() {
             healthQuery.reload();
+            remoteAvail.reload();
         }
+    }
+
+    W.RemoteAvailabilityQuery {
+        id: remoteAvail
     }
 
     property int currentPage: 0
 
     readonly property bool isCompact: MD.MProp.size.isCompact
 
-    readonly property var pageModel: [
-        {
-            icon: MD.Token.icon.wallpaper,
-            name: "Wallpapers"
-        },
-        {
-            icon: MD.Token.icon.monitor,
-            name: "Displays"
-        },
-        {
-            icon: MD.Token.icon.monitor_heart,
-            name: "Status"
-        }
+    readonly property var basePageModel: [
+        { icon: MD.Token.icon.wallpaper, name: "Wallpapers" },
+        { icon: MD.Token.icon.monitor, name: "Displays" },
+        { icon: MD.Token.icon.monitor_heart, name: "Status" }
     ]
+    readonly property var discoverPageEntry: ({ icon: MD.Token.icon.search, name: "Discover" })
+    readonly property var pageModel: remoteAvail.owned
+        ? basePageModel.slice(0, 2).concat([discoverPageEntry], basePageModel.slice(2))
+        : basePageModel
 
-    readonly property var pageComponents: ["qrc:/waywallen/ui/qml/page/WallpaperPage.qml", "qrc:/waywallen/ui/qml/page/DisplaysPage.qml", "qrc:/waywallen/ui/qml/page/StatusPage.qml",]
-    // Pages that should survive navigation. Wallpapers carries scroll
-    // position, selection, and a non-trivial list query — recreating it
-    // on every visit causes a visible reload churn.
-    readonly property var pageCacheable: [true, false, false]
+    readonly property var basePageComponents: ["qrc:/waywallen/ui/qml/page/WallpaperPage.qml", "qrc:/waywallen/ui/qml/page/DisplaysPage.qml", "qrc:/waywallen/ui/qml/page/StatusPage.qml"]
+    readonly property var pageComponents: remoteAvail.owned
+        ? basePageComponents.slice(0, 2).concat(["qrc:/waywallen/ui/qml/page/DiscoverPage.qml"], basePageComponents.slice(2))
+        : basePageComponents
+
+    readonly property var pageCacheable: remoteAvail.owned
+        ? [true, false, true, false]
+        : [true, false, false]
 
     onCurrentPageChanged: {
         m_content.switchTo(pageComponents[currentPage], {}, pageCacheable[currentPage]);
@@ -78,8 +81,10 @@ MD.ApplicationWindow {
         // before this window finishes constructing (UI launched
         // standalone against a running daemon, page reload, etc.)
         // — `daemonReady` is edge-triggered and won't fire then.
-        if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready)
+        if (W.Notify.daemonPhase === W.Notify.DaemonPhase.Ready) {
             healthQuery.reload();
+            remoteAvail.reload();
+        }
     }
 
     MD.SnakeView {

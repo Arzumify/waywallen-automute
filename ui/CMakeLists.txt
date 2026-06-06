@@ -68,6 +68,7 @@ set(SOURCES_NO_MOC
   src/msg/store.cpp
   src/model/store_item.cpp
   src/model/list_models.cpp
+  src/model/remote_model.cpp
   src/model/filter_rule_model.cpp
   src/model/user_property_model.cpp
   src/query/wallpaper_query.cpp
@@ -80,6 +81,7 @@ set(SOURCES_NO_MOC
   src/query/gpu_query.cpp
   src/query/library_query.cpp
   src/query/settings_query.cpp
+  src/query/remote_query.cpp
   src/thumb/service.cpp
 )
 
@@ -101,6 +103,7 @@ set(MOC_SOURCE_FILES
   src/msg/store.cppm
   src/model/store_item.cppm
   src/model/list_models.cppm
+  src/model/remote_model.cppm
   src/model/filter_rule_model.cppm
   src/model/user_property_model.cppm
   src/query/wallpaper_query.cppm
@@ -113,6 +116,7 @@ set(MOC_SOURCE_FILES
   src/query/gpu_query.cppm
   src/query/library_query.cppm
   src/query/settings_query.cppm
+  src/query/remote_query.cppm
   src/thumb/service.cppm
 )
 set(MODULES
@@ -145,8 +149,11 @@ set(QML_FILES
   qml/component/settings/SettingField.qml
   qml/dialog/DaemonNotRunDialog.qml
   qml/dialog/WallpaperFilterDialog.qml
+  qml/dialog/RemoteFilterDialog.qml
   qml/page/WallpaperPage.qml
   qml/page/WallpaperCard.qml
+  qml/page/DiscoverPage.qml
+  qml/page/RemoteCard.qml
   qml/page/StatusPage.qml
   qml/page/PluginManagePage.qml
   qml/page/SettingsPage.qml

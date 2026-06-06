@@ -67,6 +67,11 @@ message Request {
     PluginListRequest         plugin_list = 47;
     TagListRequest            tag_list = 48;
     ContentRatingListRequest  content_rating_list = 49;
+    RemoteAvailabilityRequest remote_availability = 50;
+    RemoteSearchRequest       remote_search = 51;
+    RemoteDownloadRequest     remote_download = 52;
+    RemoteUninstallRequest    remote_uninstall = 53;
+    RemoteDetailsRequest      remote_details = 54;
   }
 }
 
@@ -121,6 +126,11 @@ message Response {
     PluginListResponse         plugin_list = 47;
     TagListResponse            tag_list = 48;
     ContentRatingListResponse  content_rating_list = 49;
+    RemoteAvailabilityResponse remote_availability = 50;
+    RemoteSearchResponse       remote_search = 51;
+    RemoteDownloadResponse     remote_download = 52;
+    RemoteUninstallResponse    remote_uninstall = 53;
+    RemoteDetailsResponse      remote_details = 54;
   }
 }
 
@@ -566,6 +576,73 @@ message DisplayRenameResponse {
   DisplayInfo display = 1;
 }
 
+message RemoteAvailabilityRequest {}
+message RemoteAvailabilityResponse {
+  bool   owned = 1;
+  string content_dir = 2;
+}
+
+enum RemoteSort {
+  REMOTE_SORT_UNSPECIFIED = 0;
+  REMOTE_SORT_TREND = 1;
+  REMOTE_SORT_RECENT = 2;
+  REMOTE_SORT_POPULAR = 3;
+}
+
+message RemoteItem {
+  string id = 1;
+  string title = 2;
+  string preview_url = 3;
+  string author = 4;
+  bool   installed = 5;
+}
+
+message RemoteSearchRequest {
+  string query = 1;
+  RemoteSort sort = 2;
+  uint32 page = 3;
+  repeated string required_tags = 4;
+}
+message RemoteSearchResponse {
+  repeated RemoteItem items = 1;
+  bool   has_more = 2;
+  string error = 3;
+}
+
+message RemoteDownloadRequest { string id = 1; }
+message RemoteDownloadResponse {
+  bool   accepted = 1;
+  string error = 2;
+}
+
+message RemoteUninstallRequest { string id = 1; }
+message RemoteUninstallResponse {
+  bool   removed = 1;
+  string error = 2;
+}
+
+message RemoteDetailsRequest { string id = 1; }
+message RemoteDetailsResponse {
+  string description = 1;
+  string size = 2;
+  repeated string tags = 3;
+  string error = 4;
+}
+
+enum RemoteDownloadState {
+  REMOTE_DOWNLOAD_STATE_UNSPECIFIED = 0;
+  REMOTE_DOWNLOAD_STATE_PENDING = 1;
+  REMOTE_DOWNLOAD_STATE_DOWNLOADING = 2;
+  REMOTE_DOWNLOAD_STATE_DONE = 3;
+  REMOTE_DOWNLOAD_STATE_TIMEOUT = 4;
+  REMOTE_DOWNLOAD_STATE_ERROR = 5;
+}
+message RemoteDownloadProgress {
+  string id = 1;
+  RemoteDownloadState state = 2;
+  string error = 3;
+}
+
 message DisplayListRequest {}
 message DisplayListResponse {
   repeated DisplayInfo displays = 1;
@@ -660,6 +737,7 @@ message Event {
     StatusSync             status_sync               = 13;
     SettingsChanged        settings_changed          = 14;
     DisplayConnectionFailed display_connection_failed = 15;
+    RemoteDownloadProgress remote_download_progress = 16;
   }
 }
 

@@ -13,6 +13,7 @@ export import :renderer;
 export import :msg.store;
 export import :model.store_item;
 export import :model.list_models;
+export import :model.remote;
 export import :model.filter_rule;
 export import :model.user_property;
 export import :query;
