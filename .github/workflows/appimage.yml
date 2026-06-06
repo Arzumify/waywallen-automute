@@ -109,5 +109,5 @@ jobs:
           tag: ${{ steps.rel.outputs.tag }}
           artifacts: waywallen-*-x86_64.AppImage
           bodyFile: /tmp/changelog.md
-          allowUpdates: true
-          replacesArtifacts: true
+          immutableCreate: true
+          skipIfReleaseExists: true
