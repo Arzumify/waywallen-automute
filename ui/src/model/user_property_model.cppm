@@ -41,6 +41,8 @@ public:
         MaxValRole,
         CurrentValueRole,
         HasAlphaRole,
+        OptionLabelsRole,
+        OptionValuesRole,
     };
     Q_ENUM(Roles)
 
@@ -87,6 +89,8 @@ private:
         double  min_val { 0.0 };
         double  max_val { 1.0 };
         QString default_wire;
+        QStringList option_labels;
+        QStringList option_values;
         double  order { 0.0 };
     };
 

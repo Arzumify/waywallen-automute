@@ -9,9 +9,10 @@ namespace waywallen::model
 
 namespace {
 
-bool isSupported(const QString& type) {
+bool isSupported(const QString& type, bool has_options) {
     return type == QLatin1String("color") || type == QLatin1String("slider") ||
-           type == QLatin1String("bool");
+           type == QLatin1String("bool") ||
+           (type == QLatin1String("combo") && has_options);
 }
 
 QString jsonValueToWireString(const QJsonValue& v) {
@@ -53,6 +54,8 @@ QString coerceDefaultWireString(const QJsonValue& def, const QString& type) {
         return def.toBool() ? QStringLiteral("true") : QStringLiteral("false");
     if (type == QLatin1String("slider"))
         return QString::number(def.toDouble());
+    if (type == QLatin1String("combo"))
+        return jsonValueToWireString(def);
     return jsonValueToWireString(def);
 }
 
@@ -78,6 +81,8 @@ QHash<int, QByteArray> UserPropertyListModel::roleNames() const {
         { MaxValRole,       "maxVal" },
         { CurrentValueRole, "currentValue" },
         { HasAlphaRole,     "hasAlpha" },
+        { OptionLabelsRole,  "optionLabels" },
+        { OptionValuesRole,  "optionValues" },
     };
 }
 
@@ -94,6 +99,8 @@ QVariant UserPropertyListModel::data(const QModelIndex& index, int role) const {
     case MinValRole:       return e.min_val;
     case MaxValRole:       return e.max_val;
     case CurrentValueRole: return currentValueFor_(row);
+    case OptionLabelsRole:  return e.option_labels;
+    case OptionValuesRole:  return e.option_values;
     case HasAlphaRole: {
         const QString cv = currentValueFor_(row);
         static const QRegularExpression reSpaces(QStringLiteral("\\s+"));
@@ -157,7 +164,20 @@ void UserPropertyListModel::rebuildEntries_() {
                 e.label = v.value(QStringLiteral("text")).toString();
                 if (e.label.isEmpty()) e.label = e.key;
                 e.type  = v.value(QStringLiteral("type")).toString().toLower();
-                e.supported = isSupported(e.type);
+                if (v.value(QStringLiteral("options")).isArray()) {
+                    const auto opts = v.value(QStringLiteral("options")).toArray();
+                    e.option_labels.reserve(opts.size());
+                    e.option_values.reserve(opts.size());
+                    for (const auto& opt_value : opts) {
+                        const auto opt = opt_value.toObject();
+                        QString value = jsonValueToWireString(opt.value(QStringLiteral("value")));
+                        QString label = opt.value(QStringLiteral("label")).toString();
+                        if (label.isEmpty()) label = value;
+                        e.option_values.append(std::move(value));
+                        e.option_labels.append(std::move(label));
+                    }
+                }
+                e.supported = isSupported(e.type, ! e.option_values.isEmpty());
                 e.min_val   = v.value(QStringLiteral("min")).toDouble(0.0);
                 e.max_val   = v.value(QStringLiteral("max")).toDouble(1.0);
                 e.default_wire =

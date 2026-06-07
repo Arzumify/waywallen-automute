@@ -883,7 +883,7 @@ MD.Page {
                     }
 
                     // Per-property delegate. owe-supported types
-                    // (color / slider / bool) draw their native editor;
+                    // (color / slider / bool / combo) draw their native editor;
                     // anything else is a disabled label so the user
                     // knows the property exists.
                     delegate: ColumnLayout {
@@ -896,9 +896,20 @@ MD.Page {
                         required property real   maxVal
                         required property string currentValue
                         required property bool   hasAlpha
+                        required property var    optionLabels
+                        required property var    optionValues
 
                         width: ListView.view ? (ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin) : 0
                         spacing: 2
+
+                        function optionIndex(value) {
+                            const values = m_prop_delegate.optionValues || [];
+                            for (let i = 0; i < values.length; ++i) {
+                                if (String(values[i]) === String(value))
+                                    return i;
+                            }
+                            return 0;
+                        }
 
                         MD.Text {
                             text: m_prop_delegate.label
@@ -971,6 +982,25 @@ MD.Page {
                             target: m_color
                             property: "color"
                             value: W.Util.colorFromWire(m_prop_delegate.currentValue)
+                        }
+
+                        // Combo → dropdown using WE option labels, writing
+                        // the original option value back to the renderer.
+                        MD.ComboBox {
+                            id: m_combo
+                            visible: m_prop_delegate.type === "combo" && m_prop_delegate.supported
+                            Layout.fillWidth: true
+                            model: m_prop_delegate.optionLabels || []
+                            onActivated: idx => {
+                                const values = m_prop_delegate.optionValues || [];
+                                if (idx >= 0 && idx < values.length)
+                                    userPropModel.setValue(m_prop_delegate.key, String(values[idx]));
+                            }
+                        }
+                        Binding {
+                            target: m_combo
+                            property: "currentIndex"
+                            value: m_prop_delegate.optionIndex(m_prop_delegate.currentValue)
                         }
 
                         // Unsupported owe types: disabled row so users see
