@@ -125,8 +125,8 @@ int ww_bridge_send_ready(int sock,
                          uint32_t drm_render_major,
                          uint32_t drm_render_minor);
 
-/* Emit `BindBuffers` carrying `m->count` DMA-BUF fds. `fds` must have
- * exactly `m->count` entries. */
+/* Emit `BindBuffers` carrying one DMA-BUF fd per flattened buffer plane.
+ * `fds` must have exactly `m->count * m->planes_per_buffer` entries. */
 int ww_bridge_send_bind_buffers(int sock,
                                 const ww_evt_bind_buffers_t *m,
                                 const int *fds);

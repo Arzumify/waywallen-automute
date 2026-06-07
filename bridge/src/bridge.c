@@ -344,8 +344,10 @@ int ww_bridge_send_bind_buffers(int sock,
                                 const ww_evt_bind_buffers_t *m,
                                 const int *fds) {
     if (!m || !fds) return -EINVAL;
+    uint32_t n_fds = ww_evt_bind_buffers_expected_fds(m);
+    if (n_fds > WW_BRIDGE_MAX_FDS) return -E2BIG;
     WW_SEND_EVENT(sock, WW_EVT_BIND_BUFFERS, ww_evt_bind_buffers_encode,
-                  m, fds, m->count);
+                  m, fds, n_fds);
 }
 
 int ww_bridge_send_frame_ready(int sock,
