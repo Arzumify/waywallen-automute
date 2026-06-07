@@ -386,12 +386,7 @@ async fn apply_wallpaper_core(
     Ok(ApplyResult { renderer_id, entry })
 }
 
-/// Advance the queue cursor by `delta` and apply the result.
-///
-/// Sequential honors `settings.global.wallpaper_sorts` so D-Bus
-/// next/previous walk the same order the UI's wallpaper list shows.
-/// Random / Shuffle ignore sort order by design.
-pub async fn step(app: &Arc<AppState>, delta: i32) -> Result<String> {
+pub async fn step_pick(app: &Arc<AppState>, delta: i32) -> Result<String> {
     use crate::model::repo::QueueRow;
     use crate::queue::Mode;
 
@@ -414,11 +409,12 @@ pub async fn step(app: &Arc<AppState>, delta: i32) -> Result<String> {
             bridge_to_entry_id(&row)
         }
     };
+    Ok(entry_id)
+}
 
+pub async fn step(app: &Arc<AppState>, delta: i32) -> Result<String> {
+    let entry_id = step_pick(app, delta).await?;
     apply_wallpaper_by_id(app, &entry_id).await?;
-    // Reset the rotator deadline so the user gets the full quiet
-    // window after a manual advance instead of being walked over by
-    // the next auto tick.
     app.rotation.kick();
     Ok(entry_id)
 }
@@ -629,14 +625,29 @@ pub async fn run_rotator(
                     if rx.borrow().interval_secs == 0 {
                         continue;
                     }
-                    if let Err(e) = step(&app, 1).await {
-                        log::warn!("rotator tick step failed: {e:#}");
+                    let owned = app.playlists.owned_display_ids().await;
+                    let all: Vec<crate::scheduler::DisplayId> = app
+                        .router
+                        .snapshot_displays()
+                        .await
+                        .into_iter()
+                        .map(|d| d.id)
+                        .collect();
+                    let unowned: Vec<_> =
+                        all.into_iter().filter(|d| !owned.contains(d)).collect();
+                    if unowned.is_empty() {
+                        continue;
                     }
-                    // step() calls rotation.kick() on success which
-                    // emits a watch change; the next iteration's
-                    // rx.changed arm wakes immediately and we re-arm
-                    // the sleep — the user-pressed-Next branch is
-                    // identical, so manual + auto share one code path.
+                    match step_pick(&app, 1).await {
+                        Ok(id) => {
+                            if let Err(e) =
+                                apply_wallpaper_to_displays(&app, &id, &unowned).await
+                            {
+                                log::warn!("rotator apply failed: {e:#}");
+                            }
+                        }
+                        Err(e) => log::warn!("rotator tick step failed: {e:#}"),
+                    }
                 }
                 _ = rx.changed() => continue,
                 changed = shutdown.changed() => {

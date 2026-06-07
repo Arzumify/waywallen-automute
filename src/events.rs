@@ -52,7 +52,9 @@ pub enum GlobalEvent {
     /// A wallpaper sync finished successfully; `count` is the total
     /// entry count after the swap. Sync start is observable via
     /// `StatusSync.scan_in_progress` — no separate started event.
-    SyncFinished { count: usize },
+    SyncFinished {
+        count: usize,
+    },
     /// A wallpaper sync failed; the string is the formatted error.
     /// Maps to the same wire message as `SyncFinished` with `error`
     /// populated.
@@ -61,7 +63,9 @@ pub enum GlobalEvent {
     /// `LibraryAdd` (single path) or via `LibraryAutoDetect` (one or
     /// more). UI mirrors this through `Notify` and surfaces a toast.
     /// `paths` is the absolute library root list of the additions.
-    LibrariesAdded { paths: Vec<String> },
+    LibrariesAdded {
+        paths: Vec<String>,
+    },
     /// Some piece of daemon-side runtime state changed. Carries no
     /// payload — receivers re-snapshot via the `StatusSync` builder
     /// in `ws_server`. Used by the closed-loop UI status binding;
@@ -84,6 +88,7 @@ pub enum GlobalEvent {
         error_code: u32,
         reason: String,
     },
+    PlaylistChanged,
 }
 
 pub struct EventBus {

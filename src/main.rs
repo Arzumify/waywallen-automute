@@ -16,6 +16,7 @@ mod events;
 mod gpu;
 mod ipc;
 mod model;
+pub mod playlist;
 mod plugin;
 mod probe;
 mod queue;
@@ -86,6 +87,7 @@ pub struct AppState {
     /// Shared media probe. Constructed once at startup; reused by both
     /// SourceManager and the sync layer so dlopen happens at most once.
     pub probe: Arc<dyn MediaProbe>,
+    pub playlists: playlist::engine::Engine,
 }
 
 impl AppState {
@@ -371,6 +373,7 @@ async fn async_main() -> anyhow::Result<()> {
         shutdown: shutdown_tx,
         tasks: task_mgr.clone(),
         probe: probe.clone(),
+        playlists: playlist::engine::Engine::new(),
     });
 
     // Auto-rotation service. Runs forever (or until shutdown), parked
@@ -636,6 +639,13 @@ async fn async_main() -> anyhow::Result<()> {
                     .await
                     .map_err(anyhow::Error::from)
             });
+    }
+
+    {
+        let app_for_pl = state.clone();
+        tokio::spawn(async move {
+            playlist::restore::watch_hotplug(app_for_pl).await;
+        });
     }
 
     // Background media-probe scheduler. Pulls items with NULL media

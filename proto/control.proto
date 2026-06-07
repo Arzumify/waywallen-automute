@@ -72,6 +72,9 @@ message Request {
     RemoteDownloadRequest     remote_download = 52;
     RemoteUninstallRequest    remote_uninstall = 53;
     RemoteDetailsRequest      remote_details = 54;
+    PlaylistExportRequest     playlist_export = 55;
+    PlaylistImportRequest     playlist_import = 56;
+    PlaylistJumpToRequest     playlist_jump_to = 58;
   }
 }
 
@@ -131,6 +134,9 @@ message Response {
     RemoteDownloadResponse     remote_download = 52;
     RemoteUninstallResponse    remote_uninstall = 53;
     RemoteDetailsResponse      remote_details = 54;
+    PlaylistExportResponse     playlist_export = 55;
+    PlaylistImportResponse     playlist_import = 56;
+    Empty                      playlist_jump_to = 58;
   }
 }
 
@@ -738,6 +744,7 @@ message Event {
     SettingsChanged        settings_changed          = 14;
     DisplayConnectionFailed display_connection_failed = 15;
     RemoteDownloadProgress remote_download_progress = 16;
+    PlaylistChanged        playlist_changed          = 17;
   }
 }
 
@@ -965,6 +972,8 @@ message SettingsChanged {
 // persisted in the DB stay activatable via PlaylistActivate; the
 // daemon handles them transparently through the resolve layer.
 
+message PlaylistChanged {}
+
 enum PlaylistMode {
   PLAYLIST_MODE_UNSPECIFIED = 0;
   SEQUENTIAL = 1;
@@ -979,12 +988,11 @@ enum PlaylistMode {
 message PlaylistSummary {
   int64  id = 1;
   string name = 2;
-  // "curated" or "smart". Smart rows are read-only over this surface
-  // until the filter API lands.
   string source_kind = 3;
   PlaylistMode mode = 4;
   uint32 interval_secs = 5;
   uint32 item_count = 6;
+  repeated string entry_ids = 7;
 }
 
 message PlaylistListRequest {}
@@ -992,14 +1000,11 @@ message PlaylistListResponse {
   repeated PlaylistSummary playlists = 1;
 }
 
-// Create a curated playlist. `item_ids` are DB `item.id` values; the
-// caller is responsible for resolving wallpaper.id → item.id (see
-// WallpaperEntry — items expose enough metadata to bridge).
 message PlaylistCreateRequest {
-  string        name = 1;
-  PlaylistMode  mode = 2;
-  uint32        interval_secs = 3;
-  repeated int64 item_ids = 4;
+  string         name = 1;
+  PlaylistMode   mode = 2;
+  uint32         interval_secs = 3;
+  repeated string entry_ids = 4;
 }
 message PlaylistCreateResponse {
   int64 id = 1;
@@ -1012,10 +1017,9 @@ message PlaylistRenameRequest {
   string name = 2;
 }
 
-// Replace the full ordered member list of a curated playlist.
 message PlaylistSetItemsRequest {
-  int64          id = 1;
-  repeated int64 item_ids = 2;
+  int64           id = 1;
+  repeated string entry_ids = 2;
 }
 
 message PlaylistSetModeRequest {
@@ -1028,29 +1032,52 @@ message PlaylistSetIntervalRequest {
   uint32 interval_secs = 2;
 }
 
-// Activate a persisted playlist. The daemon loads its mode/seed
-// (and filter, if smart) and resolves member ids against the current
-// snapshot. After this returns, Next/Previous walk the activated
-// playlist instead of the All pseudo-list.
-message PlaylistActivateRequest { int64 id = 1; }
+message PlaylistActivateRequest {
+  int64 id = 1;
+  repeated uint64 display_ids = 2;
+  bool auto_attach = 3;
+}
 
-// Switch back to the All pseudo-playlist (every wallpaper the source
-// manager currently knows about).
-message PlaylistDeactivateRequest {}
+message PlaylistDeactivateRequest {
+  repeated uint64 display_ids = 1;
+  int64 clear_auto_attach = 2;
+}
+
+message PlaylistDisplayStatus {
+  uint64 display_id = 1;
+  int64  active_id = 2;
+  PlaylistMode mode = 3;
+  uint32 interval_secs = 4;
+  string current_id = 5;
+  uint32 position = 6;
+  uint32 count = 7;
+  uint32 remaining_secs = 8;
+}
 
 message PlaylistStatusRequest {}
 message PlaylistStatusResponse {
-  // 0 means "All pseudo-playlist active".
-  int64        active_id = 1;
-  PlaylistMode mode = 2;
-  uint32       interval_secs = 3;
-  // Empty when the playlist hasn't been stepped yet.
-  string       current_id = 4;
-  // 0-indexed position of `current_id` in the resolved id list, or
-  // 0 if no current. `count` is the resolved size.
-  uint32       position = 5;
-  uint32       count = 6;
-  bool         is_smart = 7;
+  repeated PlaylistDisplayStatus displays = 1;
+  int64 auto_attach_id = 2;
+}
+
+message PlaylistExportRequest {
+  int64  id = 1;
+  string path = 2;
+}
+message PlaylistExportResponse {}
+
+message PlaylistImportRequest {
+  string path = 1;
+  int64  into_id = 2;
+}
+message PlaylistImportResponse {
+  int64  id = 1;
+  uint32 missing_count = 2;
+}
+
+message PlaylistJumpToRequest {
+  int64  id = 1;
+  string entry_id = 2;
 }
 
 // ---------------------------------------------------------------------------
