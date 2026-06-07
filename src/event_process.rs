@@ -170,6 +170,15 @@ fn record(
     settle: Duration,
 ) {
     let key = snap.instance_id.as_deref().unwrap_or(&snap.name);
+    let playlist_owned = state
+        .settings
+        .display_prefs(key)
+        .and_then(|p| p.active_playlist_id)
+        .or_else(|| state.settings.global().auto_attach_playlist_id)
+        .is_some();
+    if playlist_owned {
+        return;
+    }
     let Some(wp_id) = state.settings.resolved_last_wallpaper(key) else {
         return;
     };

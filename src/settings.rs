@@ -67,6 +67,7 @@ pub struct DisplayPrefs {
     /// `GlobalSettings::last_wallpaper`.
     pub last_wallpaper: Option<String>,
     pub alias: Option<String>,
+    pub active_playlist_id: Option<i64>,
 }
 
 impl DisplayPrefs {
@@ -78,6 +79,7 @@ impl DisplayPrefs {
             && self.autopause_resume_ms.is_none()
             && self.last_wallpaper.is_none()
             && self.alias.is_none()
+            && self.active_playlist_id.is_none()
     }
 }
 
@@ -207,6 +209,9 @@ pub struct GlobalSettings {
     /// Content ratings hidden by the browser's quick toggles.
     #[serde(default)]
     pub wallpaper_skip_content_ratings: Vec<String>,
+
+    #[serde(default)]
+    pub auto_attach_playlist_id: Option<i64>,
 }
 
 impl Default for GlobalSettings {
@@ -222,6 +227,7 @@ impl Default for GlobalSettings {
             wallpaper_skip_types: Vec::new(),
             wallpaper_filter_tags: Vec::new(),
             wallpaper_skip_content_ratings: Vec::new(),
+            auto_attach_playlist_id: None,
         }
     }
 }
