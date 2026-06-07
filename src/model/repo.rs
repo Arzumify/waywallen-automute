@@ -470,6 +470,18 @@ pub async fn get_entry(
     Ok(Some(entry))
 }
 
+pub async fn find_item_id_by_external_id(
+    db: &DatabaseConnection,
+    external_id: &str,
+) -> Result<Option<i64>> {
+    Ok(item::Entity::find()
+        .filter(item::Column::ExternalId.eq(external_id))
+        .one(db)
+        .await
+        .with_context(|| format!("select item by external_id={external_id}"))?
+        .map(|it| it.id))
+}
+
 pub async fn list_item_keys_by_wallpaper_filters(
     db: &DatabaseConnection,
     filters: &[crate::control_proto::WallpaperFilterRule],
