@@ -2,7 +2,7 @@ module;
 #include "QExtra/macro_qt.hpp"
 
 #ifdef Q_MOC_RUN
-#    include "waywallen/gpu.moc"
+#    include "waywallen/objmodel/gpu.moc"
 #endif
 
 export module waywallen:gpu;

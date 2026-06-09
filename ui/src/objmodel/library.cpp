@@ -1,5 +1,5 @@
 module;
-#include "waywallen/library.moc.h"
+#include "waywallen/objmodel/library.moc.h"
 
 #undef assert
 #include <rstd/macro.hpp>
@@ -148,4 +148,4 @@ void LibraryManager::handleEvent(const proto::Event& evt) {
 
 } // namespace waywallen
 
-#include "waywallen/library.moc.cpp"
+#include "waywallen/objmodel/library.moc.cpp"

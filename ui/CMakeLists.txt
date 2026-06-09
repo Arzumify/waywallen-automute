@@ -60,11 +60,11 @@ set(SOURCES_NO_MOC
   src/backend.cpp
   src/app.cpp
   src/daemon_dbus.cpp
-  src/display.cpp
-  src/gpu.cpp
-  src/library.cpp
+  src/objmodel/display.cpp
+  src/objmodel/gpu.cpp
+  src/objmodel/library.cpp
   src/notify.cpp
-  src/renderer.cpp
+  src/objmodel/renderer.cpp
   src/msg/store.cpp
   src/model/store_item.cpp
   src/model/list_models.cpp
@@ -96,11 +96,11 @@ set(MOC_SOURCE_FILES
   src/app.cppm
   src/backend.cppm
   src/daemon_dbus.cppm
-  src/display.cppm
-  src/gpu.cppm
-  src/library.cppm
+  src/objmodel/display.cppm
+  src/objmodel/gpu.cppm
+  src/objmodel/library.cppm
   src/notify.cppm
-  src/renderer.cppm
+  src/objmodel/renderer.cppm
   src/msg/store.cppm
   src/model/store_item.cppm
   src/model/list_models.cppm

@@ -1,5 +1,5 @@
 module;
-#include "waywallen/gpu.moc.h"
+#include "waywallen/objmodel/gpu.moc.h"
 
 #undef assert
 #include <rstd/macro.hpp>
@@ -70,4 +70,4 @@ void GpuManager::replaceAll(const QList<proto::GpuInfo>& list) {
 
 } // namespace waywallen
 
-#include "waywallen/gpu.moc.cpp"
+#include "waywallen/objmodel/gpu.moc.cpp"

@@ -2,7 +2,7 @@ module;
 #include "QExtra/macro_qt.hpp"
 
 #ifdef Q_MOC_RUN
-#    include "waywallen/library.moc"
+#    include "waywallen/objmodel/library.moc"
 #endif
 
 export module waywallen:library;

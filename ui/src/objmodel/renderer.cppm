@@ -2,7 +2,7 @@ module;
 #include "QExtra/macro_qt.hpp"
 
 #ifdef Q_MOC_RUN
-#    include "waywallen/renderer.moc"
+#    include "waywallen/objmodel/renderer.moc"
 #endif
 
 export module waywallen:renderer;

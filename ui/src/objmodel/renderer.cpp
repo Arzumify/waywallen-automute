@@ -1,5 +1,5 @@
 module;
-#include "waywallen/renderer.moc.h"
+#include "waywallen/objmodel/renderer.moc.h"
 
 #undef assert
 #include <rstd/macro.hpp>
@@ -172,4 +172,4 @@ void RendererManager::handleEvent(const proto::Event& evt) {
 
 } // namespace waywallen
 
-#include "waywallen/renderer.moc.cpp"
+#include "waywallen/objmodel/renderer.moc.cpp"

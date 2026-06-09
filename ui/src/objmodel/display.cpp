@@ -1,5 +1,5 @@
 module;
-#include "waywallen/display.moc.h"
+#include "waywallen/objmodel/display.moc.h"
 
 #undef assert
 #include <rstd/macro.hpp>
@@ -221,4 +221,4 @@ void DisplayManager::handleEvent(const proto::Event& evt) {
 
 } // namespace waywallen
 
-#include "waywallen/display.moc.cpp"
+#include "waywallen/objmodel/display.moc.cpp"

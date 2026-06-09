@@ -2,7 +2,7 @@ module;
 #include "QExtra/macro_qt.hpp"
 
 #ifdef Q_MOC_RUN
-#    include "waywallen/display.moc"
+#    include "waywallen/objmodel/display.moc"
 #endif
 
 export module waywallen:display;
