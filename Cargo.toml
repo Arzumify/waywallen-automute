@@ -33,7 +33,7 @@ libc = "0.2"
 ash = "0.38"
 toml = "0.8"
 glob = "0.3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "2", default-features = false, features = ["deflate", "zstd"] }
 mlua = { version = "0.10", features = ["lua54", "vendored", "send", "async", "serialize"] }
 mlua-extra = { git = "https://github.com/hypengw/mlua-extra", rev = "16fc20f1445e6b723da78fb08b236dfeaad10db0" }
 libloading = "0.8"
