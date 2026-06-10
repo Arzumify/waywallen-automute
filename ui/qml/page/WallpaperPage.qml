@@ -128,6 +128,14 @@ MD.Page {
         onTriggered: root.openInfo()
     }
 
+    MD.Action {
+        id: openContainerFolderDetailAction
+        text: "Open container folder"
+        icon.name: MD.Token.icon.folder_open
+        enabled: root.containerFolderUrl(root.infoWallpaper()?.resource).length > 0
+        onTriggered: root.openContainerFolder()
+    }
+
     readonly property MD.Action activeApplyAction:
         ((root.selectedWallpaper?.wpType ?? "") === "image"
             && (W.App.displayManager.displays || []).length === 0)
@@ -372,6 +380,22 @@ MD.Page {
                 sizeBytes: root.infoSizeOf(wp)
             }
         }, root);
+    }
+    function containerFolderUrl(resource) {
+        let path = String(resource || "");
+        if (path.length === 0)
+            return "";
+        if (path.indexOf("file://") === 0)
+            path = path.slice(7);
+        const i = path.lastIndexOf("/");
+        if (i <= 0)
+            return "";
+        return "file://" + path.slice(0, i).split("/").map(encodeURIComponent).join("/");
+    }
+    function openContainerFolder() {
+        const url = root.containerFolderUrl(root.infoWallpaper()?.resource);
+        if (url.length > 0)
+            MD.Util.openUrlExternally(url);
     }
     showBackground: false
     padding: MD.MProp.size.isCompact ? 0 : 12
@@ -710,7 +734,7 @@ MD.Page {
                             }
 
                             MD.ActionToolBar {
-                                actions: [infoDetailAction, closeDetailAction]
+                                actions: [openContainerFolderDetailAction, infoDetailAction, closeDetailAction]
                                 iconDelegate: MD.SmallIconButton {
                                     action: MD.ToolBarLayout.action
                                 }

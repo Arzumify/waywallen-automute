@@ -40,6 +40,22 @@ Item {
             }
         }, root);
     }
+    function containerFolderUrl(resource) {
+        let path = String(resource || "");
+        if (path.length === 0)
+            return "";
+        if (path.indexOf("file://") === 0)
+            path = path.slice(7);
+        const i = path.lastIndexOf("/");
+        if (i <= 0)
+            return "";
+        return "file://" + path.slice(0, i).split("/").map(encodeURIComponent).join("/");
+    }
+    function openContainerFolder() {
+        const url = root.containerFolderUrl(root.wp?.resource);
+        if (url.length > 0)
+            MD.Util.openUrlExternally(url);
+    }
 
     readonly property var rendererCandidates: {
         const w = root.wp;
@@ -152,6 +168,14 @@ Item {
         onTriggered: root.openInfo()
     }
 
+    MD.Action {
+        id: openContainerFolderAction
+        text: "Open container folder"
+        icon.name: MD.Token.icon.folder_open
+        enabled: root.containerFolderUrl(root.wp?.resource).length > 0
+        onTriggered: root.openContainerFolder()
+    }
+
     readonly property MD.Action activeApplyAction:
         ((root.wp?.wpType ?? "") === "image"
             && (W.App.displayManager.displays || []).length === 0)
@@ -214,7 +238,7 @@ Item {
                     }
 
                     MD.ActionToolBar {
-                        actions: [infoAction, closeAction]
+                        actions: [openContainerFolderAction, infoAction, closeAction]
                         iconDelegate: MD.SmallIconButton {
                             action: MD.ToolBarLayout.action
                         }
