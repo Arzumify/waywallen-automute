@@ -344,6 +344,9 @@ message WallpaperEntry {
   // Source-provided free-form description (e.g. Wallpaper Engine
   // `project.description`). Empty when the source didn't set one.
   string description = 14;
+  // Stable source/plugin identifier (e.g. Wallpaper Engine workshop id).
+  // Empty when the source didn't set one.
+  string external_id = 15;
 }
 
 message WallpaperListRequest {

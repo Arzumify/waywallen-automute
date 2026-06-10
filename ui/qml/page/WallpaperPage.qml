@@ -113,6 +113,21 @@ MD.Page {
         }
     }
 
+    MD.Action {
+        id: closeDetailAction
+        text: "Close"
+        icon.name: MD.Token.icon.close
+        onTriggered: root.selectedWallpaper = null
+    }
+
+    MD.Action {
+        id: infoDetailAction
+        text: "Info"
+        icon.name: MD.Token.icon.info
+        enabled: root.selectedWallpaper !== null
+        onTriggered: root.openInfo()
+    }
+
     readonly property MD.Action activeApplyAction:
         ((root.selectedWallpaper?.wpType ?? "") === "image"
             && (W.App.displayManager.displays || []).length === 0)
@@ -337,6 +352,26 @@ MD.Page {
         else
             next.push(id);
         applyTargetIds = next;
+    }
+    function infoWallpaper() {
+        return (wallpaperGetQuery.wallpaper?.id_proto ?? "") !== ""
+            ? wallpaperGetQuery.wallpaper
+            : root.selectedWallpaper;
+    }
+    function infoSizeOf(w) {
+        return wallpaperQuery.data && w ? wallpaperQuery.data.sizeOf(w) : 0;
+    }
+    function openInfo() {
+        const wp = infoWallpaper();
+        if (!wp)
+            return;
+        MD.Util.showPopup('waywallen.ui/PagePopup', {
+            source: 'waywallen.ui/WallpaperInfoPage',
+            props: {
+                wallpaper: wp,
+                sizeBytes: root.infoSizeOf(wp)
+            }
+        }, root);
     }
     showBackground: false
     padding: MD.MProp.size.isCompact ? 0 : 12
@@ -650,31 +685,36 @@ MD.Page {
                             fillMode: Image.PreserveAspectFit
                         }
 
-                        // Title row
-                        RowLayout {
+                        MD.Text {
                             Layout.fillWidth: true
-
-                            MD.Text {
-                                Layout.fillWidth: true
-                                text: root.selectedWallpaper?.name || "Untitled"
-                                typescale: MD.Token.typescale.title_large
-                                color: MD.Token.color.on_surface
-                                wrapMode: Text.Wrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                            }
-
-                            MD.IconButton {
-                                icon.name: MD.Token.icon.close
-                                onClicked: root.selectedWallpaper = null
-                            }
+                            text: root.selectedWallpaper?.name || "Untitled"
+                            typescale: MD.Token.typescale.title_large
+                            color: MD.Token.color.on_surface
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
                         }
 
                         // Type
-                        MD.Text {
-                            text: root.selectedWallpaper?.wpType || ""
-                            typescale: MD.Token.typescale.label_large
-                            color: MD.Token.color.on_surface_variant
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            MD.Text {
+                                Layout.fillWidth: true
+                                text: root.selectedWallpaper?.wpType || ""
+                                typescale: MD.Token.typescale.label_large
+                                color: MD.Token.color.on_surface_variant
+                                elide: Text.ElideRight
+                                maximumLineCount: 1
+                            }
+
+                            MD.ActionToolBar {
+                                actions: [infoDetailAction, closeDetailAction]
+                                iconDelegate: MD.SmallIconButton {
+                                    action: MD.ToolBarLayout.action
+                                }
+                            }
                         }
 
                         // Flat key/value grid. Each row hides itself

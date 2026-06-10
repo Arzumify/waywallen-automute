@@ -157,6 +157,7 @@ set(QML_FILES
   qml/page/PlaylistWallpaperPicker.qml
   qml/page/PlaylistMembersView.qml
   qml/page/WallpaperDetailPanel.qml
+  qml/page/WallpaperInfoPage.qml
   qml/page/WallpaperCard.qml
   qml/page/DiscoverPage.qml
   qml/page/RemoteCard.qml

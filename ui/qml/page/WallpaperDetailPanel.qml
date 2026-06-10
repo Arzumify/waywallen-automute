@@ -26,6 +26,20 @@ Item {
         else next.push(id);
         root.applyTargetIds = next;
     }
+    function infoSizeOf(w) {
+        return m_list.data && w ? m_list.data.sizeOf(w) : 0;
+    }
+    function openInfo() {
+        if (!root.wp)
+            return;
+        MD.Util.showPopup('waywallen.ui/PagePopup', {
+            source: 'waywallen.ui/WallpaperInfoPage',
+            props: {
+                wallpaper: root.wp,
+                sizeBytes: root.infoSizeOf(root.wp)
+            }
+        }, root);
+    }
 
     readonly property var rendererCandidates: {
         const w = root.wp;
@@ -123,6 +137,21 @@ Item {
         }
     }
 
+    MD.Action {
+        id: closeAction
+        text: "Close"
+        icon.name: MD.Token.icon.close
+        onTriggered: root.back()
+    }
+
+    MD.Action {
+        id: infoAction
+        text: "Info"
+        icon.name: MD.Token.icon.info
+        enabled: (root.wp?.id_proto ?? "") !== ""
+        onTriggered: root.openInfo()
+    }
+
     readonly property MD.Action activeApplyAction:
         ((root.wp?.wpType ?? "") === "image"
             && (W.App.displayManager.displays || []).length === 0)
@@ -131,21 +160,6 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
-
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.topMargin: 8
-            Layout.leftMargin: 8
-            Layout.rightMargin: 8
-
-            MD.IconButton {
-                action: MD.Action {
-                    icon.name: MD.Token.icon.arrow_back
-                    onTriggered: root.back()
-                }
-            }
-            Item { Layout.fillWidth: true }
-        }
 
         MD.VerticalListView {
             id: m_detail_view
@@ -186,10 +200,25 @@ Item {
                     elide: Text.ElideRight
                 }
 
-                MD.Text {
-                    text: root.wp?.wpType || ""
-                    typescale: MD.Token.typescale.label_large
-                    color: MD.Token.color.on_surface_variant
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    MD.Text {
+                        Layout.fillWidth: true
+                        text: root.wp?.wpType || ""
+                        typescale: MD.Token.typescale.label_large
+                        color: MD.Token.color.on_surface_variant
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                    }
+
+                    MD.ActionToolBar {
+                        actions: [infoAction, closeAction]
+                        iconDelegate: MD.SmallIconButton {
+                            action: MD.ToolBarLayout.action
+                        }
+                    }
                 }
 
                 GridLayout {

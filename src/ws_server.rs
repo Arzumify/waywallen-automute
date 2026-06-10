@@ -2073,6 +2073,7 @@ fn entry_to_pb(
         user_properties_schema,
         user_property_overrides,
         description: e.description.clone().unwrap_or_default(),
+        external_id: e.external_id.clone().unwrap_or_default(),
     }
 }
 
