@@ -9,11 +9,14 @@ Item {
     id: root
 
     property string wallpaperId: ""
+    property var fallbackWallpaper: null
     property bool showApply: true
 
     signal back
 
-    readonly property var wp: wallpaperGetQuery.wallpaper
+    readonly property var wp: (wallpaperGetQuery.wallpaper?.id_proto ?? "") !== ""
+                              ? wallpaperGetQuery.wallpaper
+                              : root.fallbackWallpaper
 
     property var applyTargetIds: []
     property int rendererIndex: 0
@@ -77,6 +80,24 @@ Item {
     W.RendererPluginListQuery { id: pluginQuery }
     W.WallpaperApplyQuery { id: applyQuery }
     W.WallpaperApplyViaPortalQuery { id: portalApplyQuery }
+
+    Connections {
+        target: applyQuery
+        function onRendererIdChanged() {
+            if (applyQuery.rendererId)
+                wallpaperGetQuery.reload();
+        }
+    }
+
+    Connections {
+        target: portalApplyQuery
+        function onStatusChanged() {
+            if (portalApplyQuery.status === 3)
+                W.Action.toast("Portal apply failed");
+            else if (portalApplyQuery.status === 2)
+                W.Action.toast("Wallpaper sent to desktop portal");
+        }
+    }
 
     W.WallpaperPropertySetQuery {
         id: setQuery
@@ -404,6 +425,11 @@ Item {
                             icon.name: MD.Token.icon.restart_alt
                             mdState.size: MD.Enum.XS
                             onClicked: userPropModel.resetAll()
+
+                            MD.ToolTip {
+                                visible: parent.hovered
+                                text: "Reset to defaults"
+                            }
                         }
                     }
                 }
@@ -419,9 +445,20 @@ Item {
                 required property real   maxVal
                 required property string currentValue
                 required property bool   hasAlpha
+                required property var    optionLabels
+                required property var    optionValues
 
                 width: ListView.view ? (ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin) : 0
                 spacing: 2
+
+                function optionIndex(value) {
+                    const values = m_prop_delegate.optionValues || [];
+                    for (let i = 0; i < values.length; ++i) {
+                        if (String(values[i]) === String(value))
+                            return i;
+                    }
+                    return 0;
+                }
 
                 MD.Text {
                     text: m_prop_delegate.label
@@ -481,6 +518,23 @@ Item {
                     target: m_color
                     property: "color"
                     value: W.Util.colorFromWire(m_prop_delegate.currentValue)
+                }
+
+                MD.ComboBox {
+                    id: m_combo
+                    visible: m_prop_delegate.type === "combo" && m_prop_delegate.supported
+                    Layout.fillWidth: true
+                    model: m_prop_delegate.optionLabels || []
+                    onActivated: idx => {
+                        const values = m_prop_delegate.optionValues || [];
+                        if (idx >= 0 && idx < values.length)
+                            userPropModel.setValue(m_prop_delegate.key, String(values[idx]));
+                    }
+                }
+                Binding {
+                    target: m_combo
+                    property: "currentIndex"
+                    value: m_prop_delegate.optionIndex(m_prop_delegate.currentValue)
                 }
 
                 MD.Text {
@@ -566,6 +620,11 @@ Item {
                 Layout.fillWidth: true
                 action: root.activeApplyAction
                 mdState.type: MD.Enum.BtFilled
+
+                MD.ToolTip {
+                    visible: applyBtn.hovered && !applyBtn.enabled
+                    text: "No display connected"
+                }
             }
 
             RowLayout {

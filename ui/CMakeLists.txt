@@ -159,6 +159,14 @@ set(QML_FILES
   qml/page/WallpaperDetailPanel.qml
   qml/page/WallpaperInfoPage.qml
   qml/page/WallpaperCard.qml
+  qml/page/wallpaper/SelectSheet.qml
+  qml/page/wallpaper/TweakSheet.qml
+  qml/page/wallpaper/TweakState.qml
+  qml/page/wallpaper/NewPlaylistSheetContent.qml
+  qml/page/wallpaper/AddToPlaylistSheetContent.qml
+  qml/page/wallpaper/SelectSheetContentState.qml
+  qml/page/wallpaper/PlaylistListSheet.qml
+  qml/page/wallpaper/PlaylistListSheetState.qml
   qml/page/DiscoverPage.qml
   qml/page/RemoteCard.qml
   qml/page/StatusPage.qml

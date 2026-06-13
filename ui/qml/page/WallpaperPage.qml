@@ -91,6 +91,25 @@ MD.Page {
         }
     }
 
+    W.TweakState {
+        id: wallpaperTweakState
+    }
+
+    W.PlaylistListSheetState {
+        id: playlistListSheetState
+        page: root
+        playlistListQuery: playlistListQuery
+        playlistMutation: playlistMutation
+        playlistPlaybackMutation: playlistPlaybackMutation
+    }
+
+    W.SelectSheetContentState {
+        id: selectSheetContentState
+        page: root
+        playlistListQuery: playlistListQuery
+        playlistMutation: playlistMutation
+    }
+
     Qml.Timer {
         id: playlistMutationCleanupTimer
         interval: MD.Token.duration.short4 + 16
@@ -100,8 +119,8 @@ MD.Page {
             root.playlistMutationPendingMessage = "";
             playlistListQuery.reload();
             root.clearWallpaperSelection();
-            if (playlistListSheet.opened || playlistListSheet.entering)
-                playlistListSheet.close();
+            if (root.isSheetActive(root.playlistListSheet))
+                root.playlistListSheet.close();
             if (message.length > 0)
                 W.Action.toast(message);
         }
@@ -186,93 +205,6 @@ MD.Page {
             reloadAll();
     }
 
-    W.WallpaperApplyQuery {
-        id: applyQuery
-    }
-
-    // After a successful apply the renderer eventually emits
-    // `ReportProperties`; re-fetch the detail entry so the
-    // UserPropertyPanel picks up the freshly-published schema.
-    Connections {
-        target: applyQuery
-        function onRendererIdChanged() {
-            if (applyQuery.rendererId)
-                wallpaperGetQuery.reload();
-        }
-    }
-
-    // Independent of applyQuery: hands the image URI to the DE's
-    // xdg-desktop-portal Wallpaper backend. Image-only; engaged only
-    // when displays.length == 0 (no daemon display surface available).
-    W.WallpaperApplyViaPortalQuery {
-        id: portalApplyQuery
-    }
-    Connections {
-        target: portalApplyQuery
-        function onStatusChanged() {
-            // QAsyncResult::Status — 2=Finished, 3=Error.
-            if (portalApplyQuery.status === 3)
-                W.Action.toast("Portal apply failed");
-            else if (portalApplyQuery.status === 2)
-                W.Action.toast("Wallpaper sent to desktop portal");
-        }
-    }
-
-    MD.Action {
-        id: applyAction
-        text: "Apply"
-        busy: applyQuery.querying
-        enabled: (W.App.displayManager.displays || []).length > 0
-        onTriggered: {
-            if (busy) return;
-            if (!root.selectedWallpaper) return;
-            applyQuery.wallpaper = root.selectedWallpaper;
-            applyQuery.displayIds = root.applyTargetIds;
-            if (root.rendererCandidates.length >= 2) {
-                const pick = root.rendererCandidates[root.rendererIndex];
-                applyQuery.rendererName = pick ? (pick.name || "") : "";
-            } else {
-                applyQuery.rendererName = "";
-            }
-            applyQuery.reload();
-        }
-    }
-
-    MD.Action {
-        id: applyViaPortalAction
-        text: "Apply via desktop portal"
-        busy: portalApplyQuery.querying
-        onTriggered: {
-            if (busy) return;
-            if (!root.selectedWallpaper) return;
-            portalApplyQuery.wallpaperId = root.selectedWallpaper.id_proto;
-            portalApplyQuery.reload();
-        }
-    }
-
-    MD.Action {
-        id: closeDetailAction
-        text: "Close"
-        icon.name: MD.Token.icon.close
-        onTriggered: root.selectedWallpaper = null
-    }
-
-    MD.Action {
-        id: infoDetailAction
-        text: "Info"
-        icon.name: MD.Token.icon.info
-        enabled: root.selectedWallpaper !== null
-        onTriggered: root.openInfo()
-    }
-
-    MD.Action {
-        id: openContainerFolderDetailAction
-        text: "Open container folder"
-        icon.name: MD.Token.icon.folder_open
-        enabled: root.containerFolderUrl(root.infoWallpaper()?.resource).length > 0
-        onTriggered: root.openContainerFolder()
-    }
-
     MD.Action {
         id: createPlaylistFromSelectionAction
         text: "New playlist"
@@ -316,7 +248,7 @@ MD.Page {
         id: tweakAction
         text: "Tweak"
         icon.name: MD.Token.icon.tune
-        checked: wallpaperTweakSheet.opened || wallpaperTweakSheet.entering
+        checked: root.isSheetActive(root.wallpaperTweakSheet)
         onTriggered: root.toggleWallpaperTweakSheet()
     }
 
@@ -343,21 +275,6 @@ MD.Page {
         text: "Refresh"
         enabled: !W.Notify.scanInProgress
         onTriggered: scanQuery.reload()
-    }
-
-    readonly property MD.Action activeApplyAction:
-        ((root.selectedWallpaper?.wpType ?? "") === "image"
-            && (W.App.displayManager.displays || []).length === 0)
-        ? applyViaPortalAction : applyAction
-
-    // Detail panel uses this to fetch the freshest view (tags + media
-    // meta) for the currently-selected entry. Reload is auto-triggered
-    // when wallpaperId changes.
-    W.WallpaperGetQuery {
-        id: wallpaperGetQuery
-        // `id` is a QML keyword, so qtprotobuf renames `WallpaperEntry.id`
-        // to `id_proto`. Using `.id` here would always read undefined.
-        wallpaperId: root.selectedWallpaper?.id_proto ?? ""
     }
 
     W.RendererPluginListQuery {
@@ -489,17 +406,12 @@ MD.Page {
     property bool sortAsc: true
     property WC.wallpaperSortRule emptySortRule
 
-    readonly property int wallpaperItemLayoutFillCell: 0
-    readonly property int wallpaperItemLayoutFixed: 1
-    property int wallpaperItemSize: 162
-    property real wallpaperItemAspectRatio: 1
-    property int wallpaperItemLayoutMode: wallpaperItemLayoutFillCell
-    readonly property real wallpaperItemHeight: root.wallpaperItemSize
-        / Math.max(root.wallpaperItemAspectRatio, 0.1)
-
-    onWallpaperItemSizeChanged: if (m_grid_view) m_grid_view.forceLayout()
-    onWallpaperItemAspectRatioChanged: if (m_grid_view) m_grid_view.forceLayout()
-    onWallpaperItemLayoutModeChanged: if (m_grid_view) m_grid_view.forceLayout()
+    Connections {
+        target: wallpaperTweakState
+        function onItemSizeChanged() { root.forceWallpaperGridLayout(); }
+        function onItemAspectRatioChanged() { root.forceWallpaperGridLayout(); }
+        function onLayoutModeChanged() { root.forceWallpaperGridLayout(); }
+    }
 
     function _buildSortRule() {
         const rule = emptySortRule;
@@ -549,25 +461,16 @@ MD.Page {
         applySort();
     }
 
-    function setWallpaperItemAspectRatio(ratio) {
-        root.wallpaperItemAspectRatio = ratio;
-    }
-
-    // Renderers that advertise the selected wallpaper's wp_type, sorted
-    // by descending priority. Recomputed on selection or registry change.
-    readonly property var rendererCandidates: {
-        const wp = root.selectedWallpaper;
-        if (!wp) return [];
-        const t = wp.wpType || "";
-        if (!t) return [];
-        const list = (pluginQuery.renderers || []).filter(r => (r.types || []).indexOf(t) >= 0);
-        list.sort((a, b) => (b.priority || 0) - (a.priority || 0));
-        return list;
+    function forceWallpaperGridLayout() {
+        if (m_grid_view)
+            m_grid_view.forceLayout();
     }
 
     property var selectedWallpaper: null
     property var currentWallpaperSelect: null
     property var wallpaperSelectSheet: null
+    property var wallpaperTweakSheet: null
+    property var playlistListSheet: null
     readonly property int selectionSheetReserve: wallpaperSelectSheetRelay.currentComponent ? 360 : 160
     readonly property int selectedWallpaperCount: root.currentWallpaperSelect
         ? root.currentWallpaperSelect.selectedCount
@@ -628,6 +531,40 @@ MD.Page {
         Qt.callLater(function() {
             target.destroy();
         });
+    }
+
+    function isSheetActive(sheet) {
+        return !!sheet && (sheet.opened || sheet.entering);
+    }
+
+    function ensureWallpaperTweakSheet() {
+        if (root.wallpaperTweakSheet)
+            return root.wallpaperTweakSheet;
+
+        const sheet = MD.Util.showPopup(wallpaperTweakSheetComponent, {}, root);
+        if (sheet)
+            root.wallpaperTweakSheet = sheet;
+        return sheet;
+    }
+
+    function releaseWallpaperTweakSheet(sheet) {
+        if (root.wallpaperTweakSheet === sheet)
+            root.wallpaperTweakSheet = null;
+    }
+
+    function ensurePlaylistListSheet() {
+        if (root.playlistListSheet)
+            return root.playlistListSheet;
+
+        const sheet = MD.Util.showPopup(playlistListSheetComponent, {}, root);
+        if (sheet)
+            root.playlistListSheet = sheet;
+        return sheet;
+    }
+
+    function releasePlaylistListSheet(sheet) {
+        if (root.playlistListSheet === sheet)
+            root.playlistListSheet = null;
     }
 
     function syncWallpaperSelectSheet() {
@@ -805,24 +742,28 @@ MD.Page {
     }
 
     function togglePlaylistListSheet() {
-        if (playlistListSheet.opened || playlistListSheet.entering) {
-            playlistListSheet.close();
+        if (root.isSheetActive(root.playlistListSheet)) {
+            root.playlistListSheet.close();
             return;
         }
-        if (wallpaperTweakSheet.opened || wallpaperTweakSheet.entering)
-            wallpaperTweakSheet.close();
+        if (root.isSheetActive(root.wallpaperTweakSheet))
+            root.wallpaperTweakSheet.close();
         playlistListQuery.reload();
-        playlistListSheet.open();
+        const sheet = root.ensurePlaylistListSheet();
+        if (sheet && !sheet.opened && !sheet.entering)
+            sheet.open();
     }
 
     function toggleWallpaperTweakSheet() {
-        if (wallpaperTweakSheet.opened || wallpaperTweakSheet.entering) {
-            wallpaperTweakSheet.close();
+        if (root.isSheetActive(root.wallpaperTweakSheet)) {
+            root.wallpaperTweakSheet.close();
             return;
         }
-        if (playlistListSheet.opened || playlistListSheet.entering)
-            playlistListSheet.close();
-        wallpaperTweakSheet.open();
+        if (root.isSheetActive(root.playlistListSheet))
+            root.playlistListSheet.close();
+        const sheet = root.ensureWallpaperTweakSheet();
+        if (sheet && !sheet.opened && !sheet.entering)
+            sheet.open();
     }
 
     function isEditingPlaylist(playlist) {
@@ -838,8 +779,8 @@ MD.Page {
         root.selectedWallpaper = null;
         if (m_grid_view)
             m_grid_view.currentIndex = -1;
-        if (playlistListSheet.opened || playlistListSheet.entering)
-            playlistListSheet.close();
+        if (root.isSheetActive(root.playlistListSheet))
+            root.playlistListSheet.close();
         if (m_grid_view)
             m_grid_view.forceActiveFocus();
         root.syncWallpaperSelectSheet();
@@ -933,61 +874,6 @@ MD.Page {
         playlistMutation.remove(playlist.id);
     }
 
-    // Index into rendererCandidates; reset to 0 whenever the candidate
-    // list changes (selection or registry update).
-    property int rendererIndex: 0
-    onRendererCandidatesChanged: rendererIndex = 0
-
-    // Target display ids for Apply. Empty set = "All displays".
-    property var applyTargetIds: []
-    function isTargetAll() {
-        return applyTargetIds.length === 0;
-    }
-    function toggleTarget(id) {
-        const next = applyTargetIds.slice();
-        const i = next.indexOf(id);
-        if (i >= 0)
-            next.splice(i, 1);
-        else
-            next.push(id);
-        applyTargetIds = next;
-    }
-    function infoWallpaper() {
-        return (wallpaperGetQuery.wallpaper?.id_proto ?? "") !== ""
-            ? wallpaperGetQuery.wallpaper
-            : root.selectedWallpaper;
-    }
-    function infoSizeOf(w) {
-        return wallpaperQuery.data && w ? wallpaperQuery.data.sizeOf(w) : 0;
-    }
-    function openInfo() {
-        const wp = infoWallpaper();
-        if (!wp)
-            return;
-        MD.Util.showPopup('waywallen.ui/PagePopup', {
-            source: 'waywallen.ui/WallpaperInfoPage',
-            props: {
-                wallpaper: wp,
-                sizeBytes: root.infoSizeOf(wp)
-            }
-        }, root);
-    }
-    function containerFolderUrl(resource) {
-        let path = String(resource || "");
-        if (path.length === 0)
-            return "";
-        if (path.indexOf("file://") === 0)
-            path = path.slice(7);
-        const i = path.lastIndexOf("/");
-        if (i <= 0)
-            return "";
-        return "file://" + path.slice(0, i).split("/").map(encodeURIComponent).join("/");
-    }
-    function openContainerFolder() {
-        const url = root.containerFolderUrl(root.infoWallpaper()?.resource);
-        if (url.length > 0)
-            MD.Util.openUrlExternally(url);
-    }
     showBackground: false
     padding: MD.MProp.size.isCompact ? 0 : 12
 
@@ -1106,18 +992,18 @@ MD.Page {
                         readonly property real _availableWidth:
                             Math.max(0, width - leftMargin - rightMargin)
                         readonly property int _cols:
-                            Math.max(1, Math.floor(_availableWidth / root.wallpaperItemSize))
+                            Math.max(1, Math.floor(_availableWidth / wallpaperTweakState.itemSize))
                         readonly property real _stretchedItemWidth:
                             _availableWidth / _cols
                         readonly property bool _fillCell:
-                            root.wallpaperItemLayoutMode === root.wallpaperItemLayoutFillCell
+                            wallpaperTweakState.layoutMode === wallpaperTweakState.layoutFillCell
                         readonly property real _displayItemWidth: _fillCell
                             ? _stretchedItemWidth
-                            : Math.min(root.wallpaperItemSize, _stretchedItemWidth)
+                            : Math.min(wallpaperTweakState.itemSize, _stretchedItemWidth)
                         readonly property real _displayItemHeight: _displayItemWidth
-                            / Math.max(root.wallpaperItemAspectRatio, 0.1)
+                            / Math.max(wallpaperTweakState.itemAspectRatio, 0.1)
                         cellWidth: _stretchedItemWidth
-                        cellHeight: _fillCell ? _displayItemHeight : root.wallpaperItemHeight
+                        cellHeight: _fillCell ? _displayItemHeight : wallpaperTweakState.itemHeight
 
                         model: wallpaperQuery.data
 
@@ -1233,573 +1119,11 @@ MD.Page {
             padding: 0
             showBackground: true
 
-            contentItem: ColumnLayout {
-                spacing: 0
-
-                // Per-wallpaper user-property edits feed the daemon
-                // through a single reused query — propertyKey/value
-                // are rewritten on each flush.
-                W.WallpaperPropertySetQuery {
-                    id: setQuery
-                    wallpaperId: root.selectedWallpaper?.id_proto ?? ""
-                }
-
-                W.UserPropertyListModel {
-                    id: userPropModel
-                    schemaJson: wallpaperGetQuery.wallpaper?.userPropertiesSchema ?? ""
-                    overridesJson: wallpaperGetQuery.wallpaper?.userPropertyOverrides ?? ""
-                }
-
-                // Wire-side write buffer. The model emits one
-                // `valueChanged` per user edit; we accumulate the latest
-                // per key here and only fire the daemon RPC after the
-                // user stops touching things for 200ms.
-                QtObject {
-                    id: m_pending_writes
-                    property var entries: ({})
-                }
-
-                Qml.Timer {
-                    id: m_flush_timer
-                    interval: 200
-                    repeat: false
-                    onTriggered: {
-                        const e = m_pending_writes.entries;
-                        for (const k in e) {
-                            setQuery.propertyKey = k;
-                            setQuery.propertyValue = e[k];
-                            setQuery.reload();
-                        }
-                        m_pending_writes.entries = {};
-                    }
-                }
-
-                Connections {
-                    target: userPropModel
-                    function onValueChanged(key, value) {
-                        const e = m_pending_writes.entries;
-                        e[key] = value;
-                        m_pending_writes.entries = e;
-                        m_flush_timer.restart();
-                    }
-                }
-
-                MD.VerticalListView {
-                    id: m_detail_view
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: userPropModel
-                    spacing: 8
-                    leftMargin: 16
-                    rightMargin: 16
-                    topMargin: 0
-                    bottomMargin: 8
-
-                    header: ColumnLayout {
-                        width: m_detail_view.contentWidth
-                        spacing: 12
-
-                        // Preview
-                        W.ThumbnailImage {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: visible ? 200 : 0
-                            Layout.topMargin: 12
-                            visible: (root.selectedWallpaper?.preview ?? "") !== ""
-                                     || (["video", "image"].indexOf(root.selectedWallpaper?.wpType ?? "") >= 0
-                                         && (root.selectedWallpaper?.resource ?? "") !== "")
-                            source  : root.selectedWallpaper?.preview ?? ""
-                            resource: root.selectedWallpaper?.resource ?? ""
-                            wpType  : root.selectedWallpaper?.wpType ?? ""
-                            fillMode: Image.PreserveAspectFit
-                        }
-
-                        MD.Text {
-                            Layout.fillWidth: true
-                            text: root.selectedWallpaper?.name || "Untitled"
-                            typescale: MD.Token.typescale.title_large
-                            color: MD.Token.color.on_surface
-                            wrapMode: Text.Wrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
-                        }
-
-                        // Type
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            MD.Text {
-                                Layout.fillWidth: true
-                                text: root.selectedWallpaper?.wpType || ""
-                                typescale: MD.Token.typescale.label_large
-                                color: MD.Token.color.on_surface_variant
-                                elide: Text.ElideRight
-                                maximumLineCount: 1
-                            }
-
-                            MD.ActionToolBar {
-                                actions: [openContainerFolderDetailAction, infoDetailAction, closeDetailAction]
-                                iconDelegate: MD.SmallIconButton {
-                                    action: MD.ToolBarLayout.action
-                                }
-                            }
-                        }
-
-                        // Flat key/value grid. Each row hides itself
-                        // when the value is unknown so missing fields
-                        // collapse out of the layout.
-                        GridLayout {
-                            id: m_meta
-                            Layout.fillWidth: true
-                            columns: 2
-                            columnSpacing: 12
-                            rowSpacing: 4
-
-                            // qtprotobuf marks int64 Q_PROPERTYs as
-                            // SCRIPTABLE false, so `wallpaper.size` is
-                            // undefined from QML. Read it via the model's
-                            // C++ helper instead.
-                            readonly property real sizeBytes: wallpaperQuery.data && root.selectedWallpaper
-                                                              ? wallpaperQuery.data.sizeOf(root.selectedWallpaper)
-                                                              : 0
-                            readonly property bool hasPath: (root.selectedWallpaper?.resource ?? "") !== ""
-                            readonly property bool hasResolution: Number(root.selectedWallpaper?.width ?? 0) > 0 && Number(root.selectedWallpaper?.height ?? 0) > 0
-                            readonly property bool hasSize: sizeBytes > 0
-                            readonly property bool hasFormat: (root.selectedWallpaper?.format ?? "") !== ""
-
-                            function shortPath(p) {
-                                const parts = (p || "").split("/").filter(s => s.length > 0);
-                                return parts.slice(-2).join("/");
-                            }
-                            function formatSize(b) {
-                                let v = Number(b ?? 0);
-                                if (!(v > 0)) return "";
-                                const u = ["B", "KB", "MB", "GB", "TB"];
-                                let i = 0;
-                                while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-                                return v.toFixed(i === 0 ? 0 : 1) + " " + u[i];
-                            }
-
-                            // Path
-                            MD.Text {
-                                visible: m_meta.hasPath
-                                text: "Path"
-                                typescale: MD.Token.typescale.label_medium
-                                color: MD.Token.color.on_surface_variant
-                            }
-                            MD.Text {
-                                visible: m_meta.hasPath
-                                Layout.fillWidth: true
-                                text: m_meta.shortPath(root.selectedWallpaper?.resource)
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                                elide: Text.ElideMiddle
-                                maximumLineCount: 1
-                                wrapMode: Text.NoWrap
-                            }
-
-                            // Resolution
-                            MD.Text {
-                                visible: m_meta.hasResolution
-                                text: "Resolution"
-                                typescale: MD.Token.typescale.label_medium
-                                color: MD.Token.color.on_surface_variant
-                            }
-                            MD.Text {
-                                visible: m_meta.hasResolution
-                                text: (root.selectedWallpaper?.width ?? 0) + "×" + (root.selectedWallpaper?.height ?? 0)
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                            }
-
-                            // Size
-                            MD.Text {
-                                visible: m_meta.hasSize
-                                text: "Size"
-                                typescale: MD.Token.typescale.label_medium
-                                color: MD.Token.color.on_surface_variant
-                            }
-                            MD.Text {
-                                visible: m_meta.hasSize
-                                text: m_meta.formatSize(m_meta.sizeBytes)
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                            }
-
-                            // Format
-                            MD.Text {
-                                visible: m_meta.hasFormat
-                                text: "Format"
-                                typescale: MD.Token.typescale.label_medium
-                                color: MD.Token.color.on_surface_variant
-                            }
-                            MD.Text {
-                                visible: m_meta.hasFormat
-                                text: (root.selectedWallpaper?.format ?? "").toLowerCase()
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                            }
-                        }
-
-                        // Tags. Sourced from the per-item query
-                        // (wallpaperGetQuery) so the panel reflects DB
-                        // edits even if the list page is stale.
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: 6
-                            visible: (wallpaperGetQuery.wallpaper?.tags?.length ?? 0) > 0
-                            Repeater {
-                                model: wallpaperGetQuery.wallpaper?.tags ?? []
-                                delegate: MD.AssistChip {
-                                    required property string modelData
-                                    text: modelData
-                                }
-                            }
-                        }
-
-                        // Description (project.json `description`) — collapsed
-                        // to a fixed line count by default; user clicks the
-                        // chevron to expand. Source string is Steam Workshop
-                        // BBCode + bare URLs + `\n` line breaks; the C++
-                        // `W.Util.bbcodeToHtml` helper converts it to the
-                        // Qt.StyledText HTML subset before display.
-                        ColumnLayout {
-                            id: m_description
-                            Layout.fillWidth: true
-                            spacing: 4
-                            visible: (wallpaperGetQuery.wallpaper?.description ?? "") !== ""
-
-                            property bool expanded: false
-                            // Collapsed view shows 3 lines; expanded shows all.
-                            readonly property int collapsedLines: 3
-
-                            MD.Divider {
-                                Layout.fillWidth: true
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 4
-
-                                MD.Text {
-                                    Layout.fillWidth: true
-                                    text: "Description"
-                                    typescale: MD.Token.typescale.label_large
-                                    color: MD.Token.color.on_surface_variant
-                                }
-
-                                MD.IconButton {
-                                    icon.name: m_description.expanded ? MD.Token.icon.expand_less
-                                                                       : MD.Token.icon.expand_more
-                                    visible: m_descText.lineCount > m_description.collapsedLines
-                                          || m_description.expanded
-                                    onClicked: m_description.expanded = !m_description.expanded
-                                }
-                            }
-
-                            MD.Text {
-                                id: m_descText
-                                Layout.fillWidth: true
-                                text: W.Util.bbcodeToHtml(
-                                    wallpaperGetQuery.wallpaper?.description ?? "")
-                                textFormat: Text.StyledText
-                                typescale: MD.Token.typescale.body_medium
-                                color: MD.Token.color.on_surface
-                                wrapMode: Text.WordWrap
-                                maximumLineCount: m_description.expanded
-                                                  ? Number.MAX_SAFE_INTEGER
-                                                  : m_description.collapsedLines
-                                elide: m_description.expanded ? Text.ElideNone
-                                                              : Text.ElideRight
-                                onLinkActivated: link => MD.Util.openUrlExternally(link)
-                            }
-                        }
-
-                        // "Properties" section header — sits inside the
-                        // ListView's `header` so the title hides cleanly
-                        // when the model is empty.
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            visible: userPropModel.count > 0
-
-                            MD.Divider { Layout.fillWidth: true }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 4
-
-                                MD.Text {
-                                    Layout.fillWidth: true
-                                    text: "Properties"
-                                    typescale: MD.Token.typescale.label_large
-                                    color: MD.Token.color.on_surface_variant
-                                }
-
-                                MD.IconButton {
-                                    icon.name: MD.Token.icon.restart_alt
-                                    mdState.size: MD.Enum.XS
-                                    onClicked: userPropModel.resetAll()
-
-                                    MD.ToolTip {
-                                        visible: parent.hovered
-                                        text: "Reset to defaults"
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Per-property delegate. owe-supported types
-                    // (color / slider / bool / combo) draw their native editor;
-                    // anything else is a disabled label so the user
-                    // knows the property exists.
-                    delegate: ColumnLayout {
-                        id: m_prop_delegate
-                        required property string key
-                        required property string label
-                        required property string type
-                        required property bool   supported
-                        required property real   minVal
-                        required property real   maxVal
-                        required property string currentValue
-                        required property bool   hasAlpha
-                        required property var    optionLabels
-                        required property var    optionValues
-
-                        width: ListView.view ? (ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin) : 0
-                        spacing: 2
-
-                        function optionIndex(value) {
-                            const values = m_prop_delegate.optionValues || [];
-                            for (let i = 0; i < values.length; ++i) {
-                                if (String(values[i]) === String(value))
-                                    return i;
-                            }
-                            return 0;
-                        }
-
-                        MD.Text {
-                            text: m_prop_delegate.label
-                            textFormat: Text.StyledText
-                            typescale: MD.Token.typescale.label_medium
-                            color: MD.Token.color.on_surface
-                            Layout.fillWidth: true
-                            wrapMode: Text.WordWrap
-                            onLinkActivated: link => MD.Util.openUrlExternally(link)
-                        }
-
-                        // Bool → switch.
-                        // Plain `checked: …` bindings get severed the first
-                        // time the control writes its own state (Switch
-                        // toggle on click, Slider drag, ColorPicker accept).
-                        // Use Binding so model-driven changes (esp. Reset)
-                        // still flow back into the control afterwards.
-                        MD.Switch {
-                            id: m_switch
-                            visible: m_prop_delegate.type === "bool"
-                            onToggled: userPropModel.setValue(m_prop_delegate.key,
-                                                              checked ? "true" : "false")
-                        }
-                        Binding {
-                            target: m_switch
-                            property: "checked"
-                            value: m_prop_delegate.currentValue === "true"
-                        }
-
-                        // Slider → MD.Slider with right-aligned readout
-                        RowLayout {
-                            visible: m_prop_delegate.type === "slider"
-                            Layout.fillWidth: true
-                            spacing: 8
-                            MD.Slider {
-                                id: m_slider
-                                Layout.fillWidth: true
-                                from: m_prop_delegate.minVal
-                                to:   m_prop_delegate.maxVal
-                                onMoved: userPropModel.setValue(m_prop_delegate.key, String(value))
-                            }
-                            MD.Text {
-                                text: Number(m_prop_delegate.currentValue).toFixed(3)
-                                typescale: MD.Token.typescale.body_small
-                                color: MD.Token.color.on_surface_variant
-                                Layout.preferredWidth: 56
-                                horizontalAlignment: Text.AlignRight
-                            }
-                        }
-                        Binding {
-                            target: m_slider
-                            property: "value"
-                            value: Number(m_prop_delegate.currentValue)
-                        }
-
-                        // Color → MD.ColorPickerButton; alpha surfaces
-                        // only when the wire value already had 4 floats
-                        // (WE almost always emits RGB).
-                        MD.ColorPickerButton {
-                            id: m_color
-                            visible: m_prop_delegate.type === "color"
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 32
-                            showAlpha: m_prop_delegate.hasAlpha
-                            onAccepted: c => userPropModel.setValue(
-                                m_prop_delegate.key,
-                                W.Util.colorToWire(c, showAlpha))
-                        }
-                        Binding {
-                            target: m_color
-                            property: "color"
-                            value: W.Util.colorFromWire(m_prop_delegate.currentValue)
-                        }
-
-                        // Combo → dropdown using WE option labels, writing
-                        // the original option value back to the renderer.
-                        MD.ComboBox {
-                            id: m_combo
-                            visible: m_prop_delegate.type === "combo" && m_prop_delegate.supported
-                            Layout.fillWidth: true
-                            model: m_prop_delegate.optionLabels || []
-                            onActivated: idx => {
-                                const values = m_prop_delegate.optionValues || [];
-                                if (idx >= 0 && idx < values.length)
-                                    userPropModel.setValue(m_prop_delegate.key, String(values[idx]));
-                            }
-                        }
-                        Binding {
-                            target: m_combo
-                            property: "currentIndex"
-                            value: m_prop_delegate.optionIndex(m_prop_delegate.currentValue)
-                        }
-
-                        // Unsupported owe types: disabled row so users see
-                        // the property exists, but editing is a no-op.
-                        MD.Text {
-                            visible: !m_prop_delegate.supported
-                            text: "(" + m_prop_delegate.type + " — not yet supported)"
-                            typescale: MD.Token.typescale.body_small
-                            color: MD.Token.color.on_surface_variant
-                        }
-                    }
-                }
-
-                // Footer: pinned outside the Flickable so the Apply controls
-                // — including target / renderer selectors — stay visible
-                // regardless of how far the detail content scrolls.
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                    Layout.topMargin: 8
-                    Layout.bottomMargin: 8
-                    spacing: 8
-
-                    // Apply target — chip row over DisplayManager.displays
-                    // plus a leading "All" chip. Multi-select; empty
-                    // selection ⇒ "All" (applied to every display).
-                    // Resolution / FPS are resolved daemon-side from
-                    // plugin settings, not configured here.
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        visible: (W.App.displayManager.displays || []).length > 0
-
-                        MD.Text {
-                            text: "Apply to"
-                            typescale: MD.Token.typescale.label_medium
-                            color: MD.Token.color.on_surface_variant
-                        }
-
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            MD.FilterChip {
-                                text: "All"
-                                checked: root.isTargetAll()
-                                onClicked: root.applyTargetIds = []
-                            }
-
-                            Repeater {
-                                model: W.App.displayManager.displays
-
-                                MD.FilterChip {
-                                    required property var modelData
-                                    text: (modelData?.displayLabel ?? "") || (modelData?.name ?? "").replace(/^waywallen-[a-z]+-[a-z]+-/, "") || ("Display " + modelData?.id)
-                                    checked: root.applyTargetIds.indexOf(modelData?.id) >= 0
-                                    onClicked: root.toggleTarget(modelData?.id)
-                                }
-                            }
-                        }
-                    }
-
-                    // Renderer pick — only shown when the wallpaper
-                    // type has more than one registered renderer.
-                    // Single-select chip row; defaults to the highest-
-                    // priority candidate (index 0).
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        visible: root.rendererCandidates.length >= 2
-
-                        MD.Text {
-                            text: "Renderer"
-                            typescale: MD.Token.typescale.label_medium
-                            color: MD.Token.color.on_surface_variant
-                        }
-
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Repeater {
-                                model: root.rendererCandidates
-
-                                MD.FilterChip {
-                                    required property var modelData
-                                    required property int index
-                                    text: modelData?.name || ""
-                                    checked: root.rendererIndex === index
-                                    onClicked: root.rendererIndex = index
-                                }
-                            }
-                        }
-                    }
-
-                    // Apply button — backed by either applyAction (the
-                    // renderer/router path) or applyViaPortalAction (the
-                    // xdg-desktop-portal fallback for image wallpapers
-                    // when no display is registered). The active action
-                    // owns text + busy + enabled + onTriggered.
-                    MD.BusyButton {
-                        id: applyBtn
-                        Layout.fillWidth: true
-                        action: root.activeApplyAction
-                        mdState.type: MD.Enum.BtFilled
-
-                        MD.ToolTip {
-                            visible: applyBtn.hovered && !applyBtn.enabled
-                            text: "No display connected"
-                        }
-                    }
-
-                    // Status
-                    RowLayout {
-                        visible: applyQuery.status === 3
-                        spacing: 8
-
-                        MD.Icon {
-                            name: MD.Token.icon.check
-                            size: 20
-                            color: MD.Token.color.primary
-                        }
-                        MD.Text {
-                            text: "Applied"
-                            typescale: MD.Token.typescale.label_large
-                            color: MD.Token.color.primary
-                        }
-                    }
-                }
+            contentItem: WallpaperDetailPanel {
+                wallpaperId: root.selectedWallpaper?.id_proto ?? ""
+                fallbackWallpaper: root.selectedWallpaper
+                showApply: true
+                onBack: root.selectedWallpaper = null
             }
         }
     }
@@ -1807,44 +1131,31 @@ MD.Page {
     Component {
         id: wallpaperSelectSheetComponent
 
-        MD.BottomSheet {
-            id: wallpaperSelectSheetObject
+        W.SelectSheet {
+            popupParent: root
+            relay: wallpaperSelectSheetRelay
+            currentWallpaperSelect: root.currentWallpaperSelect
+            onReleased: function(sheet) { root.releaseWallpaperSelectSheet(sheet); }
+        }
+    }
 
-            parent: root
-            anchors.fill: parent
-            z: 20
-            sheetType: MD.Enum.BottomSheetStandard
-            dim: false
-            dismissOnDragDown: false
-            collapsedHeight: 48
+    Component {
+        id: wallpaperTweakSheetComponent
 
-            onClosed: root.releaseWallpaperSelectSheet(wallpaperSelectSheetObject)
+        W.TweakSheet {
+            popupParent: root
+            tweak: wallpaperTweakState
+            onReleased: function(sheet) { root.releaseWallpaperTweakSheet(sheet); }
+        }
+    }
 
-            ColumnLayout {
-                width: wallpaperSelectSheetObject.sheetWidth
-                spacing: 0
+    Component {
+        id: playlistListSheetComponent
 
-                MD.SheetActionBar {
-                    Layout.fillWidth: true
-                    delegateWidth: 88
-                    actions: root.currentWallpaperSelect
-                        ? (root.currentWallpaperSelect.actions || [])
-                        : []
-                }
-
-                MD.Divider {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                    visible: wallpaperSelectSheetRelay.currentComponent !== null
-                }
-
-                Loader {
-                    Layout.fillWidth: true
-                    visible: wallpaperSelectSheetRelay.currentComponent !== null
-                    sourceComponent: visible ? wallpaperSelectSheetRelay.currentComponent : null
-                }
-            }
+        W.PlaylistListSheet {
+            popupParent: root
+            sheetState: playlistListSheetState
+            onReleased: function(sheet) { root.releasePlaylistListSheet(sheet); }
         }
     }
 
@@ -1861,443 +1172,17 @@ MD.Page {
     Component {
         id: newPlaylistSheetComponent
 
-        ColumnLayout {
-            width: parent ? parent.width : implicitWidth
-            Layout.fillWidth: true
-            spacing: 0
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: 16
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
-                spacing: 8
-
-                MD.Text {
-                    Layout.fillWidth: true
-                    text: qsTr("New playlist")
-                    typescale: MD.Token.typescale.title_medium
-                    color: MD.Token.color.on_surface
-                    maximumLineCount: 1
-                    elide: Text.ElideRight
-                }
-
-                MD.TextField {
-                    id: newPlaylistNameField
-                    Layout.fillWidth: true
-                    placeholderText: qsTr("Name")
-                    onAccepted: if (createPlaylistButton.enabled) root.createPlaylistFromSelection(text)
-                }
-
-                MD.BusyButton {
-                    id: createPlaylistButton
-                    Layout.fillWidth: true
-                    text: qsTr("Create")
-                    icon.name: MD.Token.icon.playlist_add
-                    busy: playlistMutation.querying
-                    enabled: root.selectedWallpaperCount > 0 && !playlistMutation.querying
-                    mdState.type: MD.Enum.BtFilled
-                    onClicked: root.createPlaylistFromSelection(newPlaylistNameField.text)
-                }
-            }
+        W.NewPlaylistSheetContent {
+            sheetState: selectSheetContentState
         }
     }
 
     Component {
         id: addToPlaylistSheetComponent
 
-        ColumnLayout {
-            width: parent ? parent.width : implicitWidth
-            Layout.fillWidth: true
-            spacing: 0
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: 16
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
-                spacing: 8
-
-                MD.Text {
-                    Layout.fillWidth: true
-                    text: qsTr("Add to playlist")
-                    typescale: MD.Token.typescale.title_medium
-                    color: MD.Token.color.on_surface
-                    maximumLineCount: 1
-                    elide: Text.ElideRight
-                }
-
-                MD.LinearIndicator {
-                    Layout.fillWidth: true
-                    visible: root.playlistListLoading
-                    running: visible
-                }
-
-                MD.Text {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 56
-                    visible: !root.playlistListLoading
-                          && (playlistListQuery.playlists || []).length === 0
-                    text: qsTr("No playlists found")
-                    typescale: MD.Token.typescale.body_medium
-                    color: MD.Token.color.on_surface_variant
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-
-                MD.VerticalListView {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Math.min(260, Math.max(88, contentHeight + topMargin + bottomMargin))
-                    visible: (playlistListQuery.playlists || []).length > 0
-                    interactive: contentHeight + topMargin + bottomMargin > height
-                    model: playlistListQuery.playlists || []
-                    spacing: 6
-                    leftMargin: 0
-                    rightMargin: 0
-                    topMargin: 0
-                    bottomMargin: 0
-
-                    delegate: MD.ListItem {
-                        id: selectPlaylistItem
-
-                        required property var modelData
-
-                        width: ListView.view.contentWidth
-                        radius: 12
-                        text: modelData.name || qsTr("Untitled")
-                        supportText: qsTr("%1 wallpapers").arg((modelData.entryIds || []).length)
-
-                        trailing: MD.BusyIconButton {
-                            enabled: root.selectedWallpaperCount > 0 && !playlistMutation.querying
-                            busy: playlistMutation.querying
-                            icon.name: MD.Token.icon.add
-                            onClicked: root.addSelectionToPlaylist(selectPlaylistItem.modelData)
-
-                            MD.ToolTip {
-                                visible: parent.hovered
-                                text: qsTr("Add selection")
-                            }
-                        }
-                    }
-                }
-            }
+        W.AddToPlaylistSheetContent {
+            sheetState: selectSheetContentState
         }
     }
 
-    MD.BottomSheet {
-        id: wallpaperTweakSheet
-        parent: root
-        anchors.fill: parent
-        z: 25
-        sheetType: MD.Enum.BottomSheetModal
-        dim: false
-        dismissOnDragDown: true
-        maxSheetWidth: 560
-
-        ColumnLayout {
-            width: wallpaperTweakSheet.sheetWidth
-            spacing: 0
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
-                spacing: 16
-
-                MD.Text {
-                    Layout.fillWidth: true
-                    text: qsTr("Tweak")
-                    typescale: MD.Token.typescale.title_medium
-                    color: MD.Token.color.on_surface
-                    maximumLineCount: 1
-                    elide: Text.ElideRight
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    MD.Text {
-                        Layout.fillWidth: true
-                        text: qsTr("Aspect ratio")
-                        typescale: MD.Token.typescale.label_medium
-                        color: MD.Token.color.on_surface_variant
-                    }
-
-                    MD.SegmentedButtonGroup {
-                        size: MD.Enum.XS
-
-                        MD.SegmentedButton {
-                            text: "1:1"
-                            checked: Math.abs(root.wallpaperItemAspectRatio - 1) < 0.001
-                            onClicked: root.setWallpaperItemAspectRatio(1)
-                        }
-
-                        MD.SegmentedButton {
-                            text: "4:3"
-                            checked: Math.abs(root.wallpaperItemAspectRatio - 4 / 3) < 0.001
-                            onClicked: root.setWallpaperItemAspectRatio(4 / 3)
-                        }
-
-                        MD.SegmentedButton {
-                            text: "16:9"
-                            checked: Math.abs(root.wallpaperItemAspectRatio - 16 / 9) < 0.001
-                            onClicked: root.setWallpaperItemAspectRatio(16 / 9)
-                        }
-
-                        MD.SegmentedButton {
-                            text: "9:16"
-                            checked: Math.abs(root.wallpaperItemAspectRatio - 9 / 16) < 0.001
-                            onClicked: root.setWallpaperItemAspectRatio(9 / 16)
-                        }
-                    }
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 4
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        MD.Text {
-                            Layout.fillWidth: true
-                            text: qsTr("Size")
-                            typescale: MD.Token.typescale.label_medium
-                            color: MD.Token.color.on_surface_variant
-                        }
-
-                        MD.Text {
-                            text: qsTr("%1 px").arg(root.wallpaperItemSize)
-                            typescale: MD.Token.typescale.label_medium
-                            color: MD.Token.color.on_surface_variant
-                        }
-                    }
-
-                    MD.Slider {
-                        Layout.fillWidth: true
-                        from: 112
-                        to: 260
-                        stepSize: 8
-                        snapMode: T.Slider.SnapAlways
-                        value: root.wallpaperItemSize
-                        onMoved: root.wallpaperItemSize = Math.round(value / 8) * 8
-                    }
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    MD.Text {
-                        Layout.fillWidth: true
-                        text: qsTr("Fill mode")
-                        typescale: MD.Token.typescale.label_medium
-                        color: MD.Token.color.on_surface_variant
-                    }
-
-                    MD.SegmentedButtonGroup {
-                        size: MD.Enum.XS
-
-                        MD.SegmentedButton {
-                            text: qsTr("Fill cell")
-                            checked: root.wallpaperItemLayoutMode === root.wallpaperItemLayoutFillCell
-                            onClicked: root.wallpaperItemLayoutMode = root.wallpaperItemLayoutFillCell
-                        }
-
-                        MD.SegmentedButton {
-                            text: qsTr("Fixed")
-                            checked: root.wallpaperItemLayoutMode === root.wallpaperItemLayoutFixed
-                            onClicked: root.wallpaperItemLayoutMode = root.wallpaperItemLayoutFixed
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    MD.BottomSheet {
-        id: playlistListSheet
-        parent: root
-        anchors.fill: parent
-        z: 30
-        sheetType: MD.Enum.BottomSheetModal
-        dismissOnDragDown: true
-        maxSheetWidth: 560
-
-        ColumnLayout {
-            width: playlistListSheet.sheetWidth
-            spacing: 0
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 8
-
-                MD.Text {
-                    Layout.fillWidth: true
-                    text: qsTr("Playlists")
-                    typescale: MD.Token.typescale.title_medium
-                    color: MD.Token.color.on_surface
-                    elide: Text.ElideRight
-                    maximumLineCount: 1
-                }
-
-                MD.EmbedChip {
-                    id: playlistDisplayChip
-                    text: root.selectedPlaylistDisplay()
-                        ? root.displayLabel(root.selectedPlaylistDisplay())
-                        : qsTr("No displays")
-                    enabled: root.playlistPlayDisplays.length > 0
-                    icon.name: MD.Token.icon.monitor
-                    trailingIconName: MD.Token.icon.expand_more
-                    mdState.borderWidth: 1
-                    onClicked: playlistDisplayMenu.open()
-
-                    MD.Menu {
-                        id: playlistDisplayMenu
-                        parent: playlistDisplayChip
-                        y: parent.height
-                        model: root.playlistPlayDisplays
-                        contentDelegate: MD.MenuItem {
-                            required property var modelData
-                            text: root.displayLabel(modelData)
-                            icon.name: String(modelData.id) === String(root.selectedPlaylistDisplayId())
-                                ? MD.Token.icon.check
-                                : " "
-                            onClicked: {
-                                root.playlistPlayDisplayId = modelData.id;
-                                playlistDisplayMenu.close();
-                            }
-                        }
-                    }
-                }
-            }
-
-            MD.LinearIndicator {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 8
-                visible: root.playlistListLoading
-                running: visible
-            }
-
-            MD.Text {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 96
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                visible: !root.playlistListLoading
-                      && (playlistListQuery.playlists || []).length === 0
-                text: qsTr("No playlists found")
-                typescale: MD.Token.typescale.body_large
-                color: MD.Token.color.on_surface_variant
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            MD.VerticalListView {
-                id: playlistSheetList
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(360, Math.max(120, contentHeight + topMargin + bottomMargin))
-                visible: (playlistListQuery.playlists || []).length > 0
-                interactive: contentHeight + topMargin + bottomMargin > height
-                model: playlistListQuery.playlists || []
-                spacing: 6
-                leftMargin: 16
-                rightMargin: 16
-                topMargin: 0
-                bottomMargin: 16
-
-                delegate: MD.ListItem {
-                    id: playlistSheetItem
-                    required property var modelData
-
-                    width: ListView.view.contentWidth
-                    radius: 12
-                    text: modelData.name || qsTr("Untitled")
-                    supportText: qsTr("%1 wallpapers").arg((modelData.entryIds || []).length)
-                    heightMode: playingDisplayLabels.length > 0
-                        ? MD.Enum.ListItemThreeLine
-                        : MD.Enum.ListItemTwoLine
-                    readonly property bool playingOnSelectedDisplay: root.playlistIsPlayingOnSelectedDisplay(modelData)
-                    readonly property var playingDisplayLabels: root.playlistDisplayLabels(modelData)
-                    mdState.backgroundColor: root.isEditingPlaylist(modelData)
-                        ? MD.Token.color.primary_container
-                        : MD.Token.color.surface_container
-
-                    below: Item {
-                        implicitHeight: tagFlow.visible ? tagFlow.implicitHeight + 6 : 0
-
-                        Flow {
-                            id: tagFlow
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.topMargin: 6
-                            spacing: 4
-                            visible: playlistSheetItem.playingDisplayLabels.length > 0
-
-                            Repeater {
-                                model: playlistSheetItem.playingDisplayLabels
-
-                                W.Tag {
-                                    required property var modelData
-                                    text: modelData
-                                    bgColor: MD.Token.color.secondary_container
-                                    fgColor: MD.Token.color.on_secondary_container
-                                }
-                            }
-                        }
-                    }
-
-                    trailing: RowLayout {
-                        spacing: 4
-
-                        MD.BusyIconButton {
-                            enabled: root.selectedPlaylistDisplay() !== null
-                                  && !playlistPlaybackMutation.querying
-                            busy: playlistPlaybackMutation.querying
-                            icon.name: playlistSheetItem.playingOnSelectedDisplay
-                                ? MD.Token.icon.pause
-                                : MD.Token.icon.play_arrow
-                            onClicked: root.togglePlaylistPlayback(playlistSheetItem.modelData)
-
-                            MD.ToolTip {
-                                visible: parent.hovered && !parent.enabled
-                                text: qsTr("No displays")
-                            }
-                        }
-
-                        MD.IconButton {
-                            enabled: !playlistMutation.querying
-                            icon.name: MD.Token.icon.edit
-                            onClicked: root.editPlaylistSelection(playlistSheetItem.modelData)
-
-                            MD.ToolTip {
-                                visible: parent.hovered
-                                text: qsTr("Edit selection")
-                            }
-                        }
-
-                        MD.IconButton {
-                            enabled: !playlistMutation.querying
-                            icon.name: MD.Token.icon.delete
-                            onClicked: root.deletePlaylist(playlistSheetItem.modelData)
-
-                            MD.ToolTip {
-                                visible: parent.hovered
-                                text: qsTr("Delete playlist")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
