@@ -63,16 +63,12 @@ public:
     Q_INVOKABLE void setInterval(qint64 id, int intervalSecs);
     Q_INVOKABLE void activate(qint64 id, const QVariantList& displayIds, bool autoAttach);
     Q_INVOKABLE void deactivate(const QVariantList& displayIds, qint64 clearAutoAttach);
-    Q_INVOKABLE void exportPlaylist(qint64 id, const QString& path);
-    Q_INVOKABLE void importPlaylist(const QString& path, qint64 intoId);
     Q_INVOKABLE void jumpTo(qint64 id, const QString& entryId);
 
     void reload() override {}
 
     Q_SIGNAL void createdIdChanged();
     Q_SIGNAL void done();
-    Q_SIGNAL void exported();
-    Q_SIGNAL void imported(qint64 id, int missingCount);
 
 private:
     void   send(proto::Request req, bool captureCreate);

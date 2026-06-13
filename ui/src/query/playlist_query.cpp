@@ -203,50 +203,6 @@ void PlaylistMutationQuery::jumpTo(qint64 id, const QString& entryId) {
     send(std::move(req), false);
 }
 
-void PlaylistMutationQuery::exportPlaylist(qint64 id, const QString& path) {
-    proto::PlaylistExportRequest r;
-    r.setId_proto(id);
-    r.setPath(path);
-    proto::Request req;
-    req.setPlaylistExport(std::move(r));
-    setStatus(Status::Querying);
-    auto backend = App::instance()->backend();
-    auto self    = QWatcher { this };
-    spawn([self, backend, req = std::move(req)]() mutable -> task<void> {
-        auto result = co_await backend->send(std::move(req));
-        co_await asio::post(asio::bind_executor(self->get_executor(), use_task));
-        if (! self) co_return;
-        self->inspect_set(result, [self](const proto::Response&) {
-            Q_EMIT self->exported();
-        });
-        Q_EMIT self->done();
-        co_return;
-    });
-}
-
-void PlaylistMutationQuery::importPlaylist(const QString& path, qint64 intoId) {
-    proto::PlaylistImportRequest r;
-    r.setPath(path);
-    r.setIntoId(intoId);
-    proto::Request req;
-    req.setPlaylistImport(std::move(r));
-    setStatus(Status::Querying);
-    auto backend = App::instance()->backend();
-    auto self    = QWatcher { this };
-    spawn([self, backend, req = std::move(req)]() mutable -> task<void> {
-        auto result = co_await backend->send(std::move(req));
-        co_await asio::post(asio::bind_executor(self->get_executor(), use_task));
-        if (! self) co_return;
-        self->inspect_set(result, [self](const proto::Response& rsp) {
-            const auto& ir = rsp.playlistImport();
-            Q_EMIT self->imported(static_cast<qint64>(ir.id_proto()),
-                                  static_cast<int>(ir.missingCount()));
-        });
-        Q_EMIT self->done();
-        co_return;
-    });
-}
-
 } // namespace waywallen
 
 #include "waywallen/query/playlist_query.moc.cpp"

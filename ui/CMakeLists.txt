@@ -68,6 +68,7 @@ set(SOURCES_NO_MOC
   src/msg/store.cpp
   src/model/store_item.cpp
   src/model/list_models.cpp
+  src/model/wallpaper_select_storage.cpp
   src/model/remote_model.cpp
   src/model/filter_rule_model.cpp
   src/model/user_property_model.cpp
@@ -104,6 +105,7 @@ set(MOC_SOURCE_FILES
   src/msg/store.cppm
   src/model/store_item.cppm
   src/model/list_models.cppm
+  src/model/wallpaper_select_storage.cppm
   src/model/remote_model.cppm
   src/model/filter_rule_model.cppm
   src/model/user_property_model.cppm
@@ -153,9 +155,7 @@ set(QML_FILES
   qml/dialog/WallpaperFilterDialog.qml
   qml/dialog/RemoteFilterDialog.qml
   qml/page/WallpaperPage.qml
-  qml/page/PlaylistPage.qml
-  qml/page/PlaylistWallpaperPicker.qml
-  qml/page/PlaylistMembersView.qml
+  qml/page/PlaylistDetailPanel.qml
   qml/page/WallpaperDetailPanel.qml
   qml/page/WallpaperInfoPage.qml
   qml/page/WallpaperCard.qml
@@ -196,7 +196,6 @@ qt_add_qml_module(
   QtCore
   QtQuick
   QtQuick.Shapes
-  QtQuick.Dialogs
   QtQml.Models
   Qcm.Material
   waywallen.control

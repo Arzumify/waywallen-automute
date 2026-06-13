@@ -83,6 +83,8 @@ Item {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton | Qt.RightButton
             cursorShape: Qt.PointingHandCursor
+            onPressed: selectionRequestedByHold = false
+            onCanceled: selectionRequestedByHold = false
             onPressAndHold: mouse => {
                 if (mouse.button !== Qt.LeftButton)
                     return;

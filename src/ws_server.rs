@@ -1893,92 +1893,11 @@ async fn dispatch_inner(
             })
         }
 
-        Req::PlaylistExport(r) => {
-            let pl = crate::playlist::repo::get(&state.db, r.id)
-                .await?
-                .ok_or_else(|| crate::error::Error::PlaylistNotFound(r.id.to_string()))?;
-            let local_ids = crate::playlist::repo::entry_ids(&state.db, r.id).await?;
-            let mut entry_ids = Vec::with_capacity(local_ids.len());
-            for id in &local_ids {
-                let portable = crate::model::repo::get_entry(&state.db, *id)
-                    .await?
-                    .and_then(|e| e.external_id)
-                    .unwrap_or_else(|| id.to_string());
-                entry_ids.push(portable);
-            }
-            let mode: crate::queue::Mode = pl.mode.into();
-            let doc = PlaylistExportDoc {
-                name: pl.name,
-                mode: mode.as_str().to_owned(),
-                interval_secs: pl.interval_secs as u32,
-                entry_ids,
-            };
-            let json = serde_json::to_string_pretty(&doc)?;
-            std::fs::write(&r.path, json)?;
-            Res::PlaylistExport(pb::PlaylistExportResponse {})
-        }
-
-        Req::PlaylistImport(r) => {
-            let data = std::fs::read_to_string(&r.path)?;
-            let doc: PlaylistExportDoc = serde_json::from_str(&data)?;
-            let mode = crate::queue::Mode::from_str(&doc.mode).unwrap_or_default();
-            let now = tasks::now_ms();
-            let mut local_ids = Vec::with_capacity(doc.entry_ids.len());
-            let mut missing_count = 0u32;
-            for stored in &doc.entry_ids {
-                if let Some(iid) =
-                    crate::model::repo::find_item_id_by_external_id(&state.db, stored).await?
-                {
-                    local_ids.push(iid);
-                } else if let Ok(iid) = stored.parse::<i64>() {
-                    if crate::model::repo::get_entry(&state.db, iid)
-                        .await?
-                        .is_some()
-                    {
-                        local_ids.push(iid);
-                    } else {
-                        missing_count += 1;
-                    }
-                } else {
-                    missing_count += 1;
-                }
-            }
-            let id = if r.into_id > 0 {
-                crate::playlist::repo::rename(&state.db, r.into_id, &doc.name, now).await?;
-                crate::playlist::repo::set_mode(&state.db, r.into_id, mode, now).await?;
-                crate::playlist::repo::set_interval(&state.db, r.into_id, doc.interval_secs, now)
-                    .await?;
-                crate::playlist::repo::set_items(&state.db, r.into_id, &local_ids, now).await?;
-                crate::playlist::engine::Engine::rebuild_for_playlist(&state, r.into_id).await;
-                r.into_id
-            } else {
-                crate::playlist::repo::create(
-                    &state.db,
-                    &doc.name,
-                    mode,
-                    doc.interval_secs,
-                    now,
-                    &local_ids,
-                )
-                .await?
-            };
-            state.events.publish(GlobalEvent::PlaylistChanged);
-            Res::PlaylistImport(pb::PlaylistImportResponse { id, missing_count })
-        }
-
         Req::PlaylistJumpTo(r) => {
             crate::playlist::engine::Engine::jump_to(&state, r.id, &r.entry_id).await?;
             Res::PlaylistJumpTo(pb::Empty {})
         }
     })
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PlaylistExportDoc {
-    name: String,
-    mode: String,
-    interval_secs: u32,
-    entry_ids: Vec<String>,
 }
 
 fn parse_entry_ids(v: &[String]) -> Vec<i64> {

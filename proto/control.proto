@@ -25,6 +25,8 @@ message ServerFrame {
 }
 
 message Request {
+  reserved 55, 56;
+
   uint64 request_id = 1;
   oneof payload {
     HealthRequest             health = 10;
@@ -72,13 +74,13 @@ message Request {
     RemoteDownloadRequest     remote_download = 52;
     RemoteUninstallRequest    remote_uninstall = 53;
     RemoteDetailsRequest      remote_details = 54;
-    PlaylistExportRequest     playlist_export = 55;
-    PlaylistImportRequest     playlist_import = 56;
     PlaylistJumpToRequest     playlist_jump_to = 58;
   }
 }
 
 message Response {
+  reserved 55, 56;
+
   uint64 request_id = 1;
   // Coarse status class, kept for back-compat with clients that haven't
   // adopted `error_code` yet. Derived from `error_code` server-side.
@@ -134,8 +136,6 @@ message Response {
     RemoteDownloadResponse     remote_download = 52;
     RemoteUninstallResponse    remote_uninstall = 53;
     RemoteDetailsResponse      remote_details = 54;
-    PlaylistExportResponse     playlist_export = 55;
-    PlaylistImportResponse     playlist_import = 56;
     Empty                      playlist_jump_to = 58;
   }
 }
@@ -1064,21 +1064,6 @@ message PlaylistStatusRequest {}
 message PlaylistStatusResponse {
   repeated PlaylistDisplayStatus displays = 1;
   int64 auto_attach_id = 2;
-}
-
-message PlaylistExportRequest {
-  int64  id = 1;
-  string path = 2;
-}
-message PlaylistExportResponse {}
-
-message PlaylistImportRequest {
-  string path = 1;
-  int64  into_id = 2;
-}
-message PlaylistImportResponse {
-  int64  id = 1;
-  uint32 missing_count = 2;
 }
 
 message PlaylistJumpToRequest {
