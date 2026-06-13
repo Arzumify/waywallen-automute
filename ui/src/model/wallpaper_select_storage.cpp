@@ -55,7 +55,7 @@ auto WallpaperSelectStorage::selectedWallpaperIds() const -> QVariantList {
 
 void WallpaperSelectStorage::clear() {
     if (hasPlaylistEditTarget()) {
-        m_playlist_edit_target = {};
+        m_playlist_edit_target    = {};
         m_playlist_edit_target_id = 0;
         Q_EMIT playlistEditTargetChanged();
     }

@@ -22,9 +22,7 @@ Action* Action::create(QQmlEngine*, QJSEngine*) {
 Action::Action(QObject* parent): QObject(parent) {}
 Action::~Action() = default;
 
-auto Action::wallpaperSelectStorage() const -> QObject* {
-    return m_wallpaper_select_storage;
-}
+auto Action::wallpaperSelectStorage() const -> QObject* { return m_wallpaper_select_storage; }
 
 void Action::enterWallpaperSelect(QObject* storage) {
     if (m_wallpaper_select_storage != storage) {

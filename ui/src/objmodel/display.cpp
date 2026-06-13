@@ -174,7 +174,7 @@ auto DisplayManager::get(quint64 id) const -> Display* {
 }
 
 void DisplayManager::replaceAll(const QList<proto::DisplayInfo>& list) {
-    const auto had_active = hasActivePlaylistDisplays();
+    const auto                  had_active = hasActivePlaylistDisplays();
     std::map<quint64, Display*> next_by_id;
     QList<Display*>             next_ordered;
     next_ordered.reserve(list.size());
@@ -228,7 +228,7 @@ void DisplayManager::remove(quint64 id) {
     auto it = m_by_id.find(id);
     if (it == m_by_id.end()) return;
     const auto had_active = hasActivePlaylistDisplays();
-    auto* d = it->second;
+    auto*      d          = it->second;
     m_by_id.erase(it);
     m_ordered.removeOne(d);
     d->deleteLater();
@@ -237,7 +237,7 @@ void DisplayManager::remove(quint64 id) {
 }
 
 void DisplayManager::replacePlaylistStatuses(const QList<proto::PlaylistDisplayStatus>& list) {
-    const auto had_active = hasActivePlaylistDisplays();
+    const auto                                             had_active = hasActivePlaylistDisplays();
     std::map<quint64, const proto::PlaylistDisplayStatus*> by_id;
     for (const auto& status : list) {
         by_id[status.displayId()] = &status;
