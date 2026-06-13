@@ -26,24 +26,6 @@ private:
     QVariantList m_playlists;
 };
 
-export class PlaylistStatusQuery : public Query,
-                                   public QueryExtra<control::v1::Response, PlaylistStatusQuery> {
-    Q_OBJECT
-    QML_ELEMENT
-    Q_PROPERTY(QVariantList displays READ displays NOTIFY displaysChanged FINAL)
-    Q_PROPERTY(qint64 autoAttachId READ autoAttachId NOTIFY displaysChanged FINAL)
-public:
-    PlaylistStatusQuery(QObject* parent = nullptr);
-    auto          displays() const -> const QVariantList&;
-    qint64        autoAttachId() const { return m_autoAttachId; }
-    void          reload() override;
-    Q_SIGNAL void displaysChanged();
-
-private:
-    QVariantList m_displays;
-    qint64       m_autoAttachId = 0;
-};
-
 export class PlaylistMutationQuery
     : public Query,
       public QueryExtra<control::v1::Response, PlaylistMutationQuery> {

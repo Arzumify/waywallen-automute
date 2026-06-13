@@ -50,41 +50,6 @@ void PlaylistListQuery::reload() {
     });
 }
 
-PlaylistStatusQuery::PlaylistStatusQuery(QObject* parent): Query(parent) {}
-auto PlaylistStatusQuery::displays() const -> const QVariantList& { return m_displays; }
-
-void PlaylistStatusQuery::reload() {
-    setStatus(Status::Querying);
-    auto backend = App::instance()->backend();
-    auto req     = proto::Request {};
-    req.setPlaylistStatus(proto::PlaylistStatusRequest {});
-    auto self = QWatcher { this };
-    spawn([self, backend, req = std::move(req)]() mutable -> task<void> {
-        auto result = co_await backend->send(std::move(req));
-        co_await asio::post(asio::bind_executor(self->get_executor(), use_task));
-        if (! self) co_return;
-        self->inspect_set(result, [self](const proto::Response& rsp) {
-            QVariantList out;
-            for (const auto& d : rsp.playlistStatus().displays()) {
-                QVariantMap m;
-                m[u"displayId"_s]     = static_cast<qulonglong>(d.displayId());
-                m[u"activeId"_s]      = static_cast<qint64>(d.activeId());
-                m[u"mode"_s]          = static_cast<int>(d.mode());
-                m[u"intervalSecs"_s]  = d.intervalSecs();
-                m[u"currentId"_s]     = d.currentId();
-                m[u"position"_s]      = d.position();
-                m[u"count"_s]         = d.count();
-                m[u"remainingSecs"_s] = d.remainingSecs();
-                out.append(m);
-            }
-            self->m_displays     = std::move(out);
-            self->m_autoAttachId = static_cast<qint64>(rsp.playlistStatus().autoAttachId());
-            Q_EMIT self->displaysChanged();
-        });
-        co_return;
-    });
-}
-
 PlaylistMutationQuery::PlaylistMutationQuery(QObject* parent): Query(parent) {}
 
 static QStringList toStr(const QVariantList& v) {

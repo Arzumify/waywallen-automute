@@ -978,7 +978,10 @@ message SettingsChanged {
 // persisted in the DB stay activatable via PlaylistActivate; the
 // daemon handles them transparently through the resolve layer.
 
-message PlaylistChanged {}
+message PlaylistChanged {
+  repeated PlaylistDisplayStatus displays = 1;
+  int64 auto_attach_id = 2;
+}
 
 enum PlaylistMode {
   PLAYLIST_MODE_UNSPECIFIED = 0;

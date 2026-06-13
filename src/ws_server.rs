@@ -110,6 +110,10 @@ async fn handle_conn(
         wrap_event(status_sync_event(&state)).encode_to_vec(),
     ))
     .await?;
+    sink.send(Message::Binary(
+        wrap_event(playlist_changed_event(&state).await).encode_to_vec(),
+    ))
+    .await?;
 
     loop {
         tokio::select! {
@@ -139,7 +143,9 @@ async fn handle_conn(
             gevt = global_rx.recv() => {
                 match gevt {
                     Ok(e) => {
-                        if let Some(pe) = global_event_to_pb(&e, &state) {
+                        if matches!(e, GlobalEvent::PlaylistChanged) {
+                            sink.send(Message::Binary(wrap_event(playlist_changed_event(&state).await).encode_to_vec())).await?;
+                        } else if let Some(pe) = global_event_to_pb(&e, &state) {
                             sink.send(Message::Binary(wrap_event(pe).encode_to_vec())).await?;
                         }
                         if matches!(e, GlobalEvent::StatusChanged) {
@@ -152,6 +158,7 @@ async fn handle_conn(
                         // authority, transient events were the lossy
                         // notifications.
                         sink.send(Message::Binary(wrap_event(status_sync_event(&state)).encode_to_vec())).await?;
+                        sink.send(Message::Binary(wrap_event(playlist_changed_event(&state).await).encode_to_vec())).await?;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         // Daemon shutting down — let the router-event
@@ -580,6 +587,38 @@ fn status_sync_event(state: &Arc<AppState>) -> pb::Event {
     }
 }
 
+fn playlist_display_status_to_pb(
+    d: crate::playlist::engine::DisplayStatus,
+) -> pb::PlaylistDisplayStatus {
+    pb::PlaylistDisplayStatus {
+        display_id: d.display_id,
+        active_id: d.active_id,
+        mode: queue_mode_to_pb_playlist(d.mode),
+        interval_secs: d.interval_secs,
+        current_id: d.current_id.unwrap_or_default(),
+        position: d.position,
+        count: d.count,
+        remaining_secs: d.remaining_secs,
+    }
+}
+
+async fn playlist_changed_event(state: &Arc<AppState>) -> pb::Event {
+    let auto_attach_id = state.settings.global().auto_attach_playlist_id.unwrap_or(0);
+    let displays = state
+        .playlists
+        .status()
+        .await
+        .into_iter()
+        .map(playlist_display_status_to_pb)
+        .collect();
+    pb::Event {
+        payload: Some(pb::event::Payload::PlaylistChanged(pb::PlaylistChanged {
+            displays,
+            auto_attach_id,
+        })),
+    }
+}
+
 /// Translate the subset of `GlobalEvent` variants the UI cares about
 /// into wire `pb::Event`s. Returns `None` for events that are
 /// daemon-internal (boot phase markers, restore lifecycle).
@@ -634,15 +673,13 @@ fn global_event_to_pb(e: &GlobalEvent, state: &Arc<AppState>) -> Option<pb::Even
                 })),
             })
         }
-        GlobalEvent::PlaylistChanged => Some(pb::Event {
-            payload: Some(pb::event::Payload::PlaylistChanged(pb::PlaylistChanged {})),
-        }),
         GlobalEvent::SourcesReady
         | GlobalEvent::DisplayReady
         | GlobalEvent::DaemonReady
         | GlobalEvent::RestoreApplied(_)
         | GlobalEvent::RestoreFailed(_)
-        | GlobalEvent::StatusChanged => None,
+        | GlobalEvent::StatusChanged
+        | GlobalEvent::PlaylistChanged => None,
     }
 }
 
@@ -1877,19 +1914,7 @@ async fn dispatch_inner(
             let auto_attach_id = state.settings.global().auto_attach_playlist_id.unwrap_or(0);
             Res::PlaylistStatus(pb::PlaylistStatusResponse {
                 auto_attach_id,
-                displays: st
-                    .into_iter()
-                    .map(|d| pb::PlaylistDisplayStatus {
-                        display_id: d.display_id,
-                        active_id: d.active_id,
-                        mode: queue_mode_to_pb_playlist(d.mode),
-                        interval_secs: d.interval_secs,
-                        current_id: d.current_id.unwrap_or_default(),
-                        position: d.position,
-                        count: d.count,
-                        remaining_secs: d.remaining_secs,
-                    })
-                    .collect(),
+                displays: st.into_iter().map(playlist_display_status_to_pb).collect(),
             })
         }
 

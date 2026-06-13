@@ -83,6 +83,14 @@ MD.Page {
         }
     }
 
+    W.PlaylistMutationQuery {
+        id: playlistPlaybackMutation
+        onDone: {
+            if (playlistPlaybackMutation.status === 3)
+                W.Action.toast(qsTr("Playlist playback failed"));
+        }
+    }
+
     Qml.Timer {
         id: playlistMutationCleanupTimer
         interval: MD.Token.duration.short4 + 16
@@ -160,6 +168,9 @@ MD.Page {
         }
         function onDaemonReady() {
             root.reloadAll();
+        }
+        function onPlaylistChanged() {
+            playlistListQuery.reload();
         }
     }
 
@@ -297,6 +308,7 @@ MD.Page {
         id: playlistListAction
         text: "Playlists"
         icon.name: MD.Token.icon.playlist_play
+        checked: W.App.displayManager.hasActivePlaylistDisplays
         onTriggered: root.togglePlaylistListSheet()
     }
 
@@ -673,6 +685,99 @@ MD.Page {
         return root.currentWallpaperSelect
             ? root.currentWallpaperSelect.selectedWallpaperIds()
             : [];
+    }
+
+    property var playlistPlayDisplayId: null
+    readonly property var playlistPlayDisplays: W.App.displayManager.displays || []
+
+    onPlaylistPlayDisplaysChanged: {
+        if (playlistPlayDisplays.length === 0) {
+            playlistPlayDisplayId = null;
+            return;
+        }
+        if (!root.displayById(playlistPlayDisplayId))
+            playlistPlayDisplayId = playlistPlayDisplays[0].id;
+    }
+
+    function displayById(id) {
+        if (id === null || id === undefined)
+            return null;
+        const key = String(id);
+        const displays = root.playlistPlayDisplays || [];
+        for (let i = 0; i < displays.length; ++i) {
+            if (String(displays[i].id) === key)
+                return displays[i];
+        }
+        return null;
+    }
+
+    function displayLabel(display) {
+        if (!display)
+            return qsTr("Display");
+        const alias = display.displayLabel || "";
+        if (alias.length > 0)
+            return alias;
+        const name = (display.name || "").replace(/^waywallen-[a-z]+-[a-z]+-/, "");
+        return name.length > 0 ? name : qsTr("Display %1").arg(display.id);
+    }
+
+    function selectedPlaylistDisplay() {
+        const displays = root.playlistPlayDisplays || [];
+        if (displays.length === 0)
+            return null;
+        return root.displayById(root.playlistPlayDisplayId) || displays[0];
+    }
+
+    function selectedPlaylistDisplayId() {
+        const display = root.selectedPlaylistDisplay();
+        return display ? display.id : null;
+    }
+
+    function playlistDisplayStatuses(playlist) {
+        if (!playlist)
+            return [];
+        const playlistId = String(playlist.id);
+        const statuses = root.playlistPlayDisplays || [];
+        const out = [];
+        for (let i = 0; i < statuses.length; ++i) {
+            if (String(statuses[i].activePlaylistId) === playlistId)
+                out.push(statuses[i]);
+        }
+        return out;
+    }
+
+    function playlistDisplayLabels(playlist) {
+        const statuses = root.playlistDisplayStatuses(playlist);
+        const out = [];
+        for (let i = 0; i < statuses.length; ++i)
+            out.push(root.displayLabel(statuses[i]));
+        return out;
+    }
+
+    function playlistIsPlayingOnSelectedDisplay(playlist) {
+        const displayId = root.selectedPlaylistDisplayId();
+        if (!playlist || displayId === null || displayId === undefined)
+            return false;
+        const playlistId = String(playlist.id);
+        const displayKey = String(displayId);
+        const statuses = root.playlistPlayDisplays || [];
+        for (let i = 0; i < statuses.length; ++i) {
+            if (String(statuses[i].id) === displayKey
+                    && String(statuses[i].activePlaylistId) === playlistId)
+                return true;
+        }
+        return false;
+    }
+
+    function togglePlaylistPlayback(playlist) {
+        const display = root.selectedPlaylistDisplay();
+        if (!playlist || !display || playlistPlaybackMutation.querying)
+            return;
+        const displayIds = [display.id];
+        if (root.playlistIsPlayingOnSelectedDisplay(playlist))
+            playlistPlaybackMutation.deactivate(displayIds, 0);
+        else
+            playlistPlaybackMutation.activate(playlist.id, displayIds, false);
     }
 
     function togglePlaylistListSheet() {
@@ -1857,6 +1962,36 @@ MD.Page {
                     elide: Text.ElideRight
                     maximumLineCount: 1
                 }
+
+                MD.EmbedChip {
+                    id: playlistDisplayChip
+                    text: root.selectedPlaylistDisplay()
+                        ? root.displayLabel(root.selectedPlaylistDisplay())
+                        : qsTr("No displays")
+                    enabled: root.playlistPlayDisplays.length > 0
+                    icon.name: MD.Token.icon.monitor
+                    trailingIconName: MD.Token.icon.expand_more
+                    mdState.borderWidth: 1
+                    onClicked: playlistDisplayMenu.open()
+
+                    MD.Menu {
+                        id: playlistDisplayMenu
+                        parent: playlistDisplayChip
+                        y: parent.height
+                        model: root.playlistPlayDisplays
+                        contentDelegate: MD.MenuItem {
+                            required property var modelData
+                            text: root.displayLabel(modelData)
+                            icon.name: String(modelData.id) === String(root.selectedPlaylistDisplayId())
+                                ? MD.Token.icon.check
+                                : " "
+                            onClicked: {
+                                root.playlistPlayDisplayId = modelData.id;
+                                playlistDisplayMenu.close();
+                            }
+                        }
+                    }
+                }
             }
 
             MD.LinearIndicator {
@@ -1903,15 +2038,59 @@ MD.Page {
                     radius: 12
                     text: modelData.name || qsTr("Untitled")
                     supportText: qsTr("%1 wallpapers").arg((modelData.entryIds || []).length)
+                    heightMode: playingDisplayLabels.length > 0
+                        ? MD.Enum.ListItemThreeLine
+                        : MD.Enum.ListItemTwoLine
+                    readonly property bool playingOnSelectedDisplay: root.playlistIsPlayingOnSelectedDisplay(modelData)
+                    readonly property var playingDisplayLabels: root.playlistDisplayLabels(modelData)
                     mdState.backgroundColor: root.isEditingPlaylist(modelData)
                         ? MD.Token.color.primary_container
                         : MD.Token.color.surface_container
 
+                    below: Item {
+                        implicitHeight: tagFlow.visible ? tagFlow.implicitHeight + 6 : 0
+
+                        Flow {
+                            id: tagFlow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.topMargin: 6
+                            spacing: 4
+                            visible: playlistSheetItem.playingDisplayLabels.length > 0
+
+                            Repeater {
+                                model: playlistSheetItem.playingDisplayLabels
+
+                                W.Tag {
+                                    required property var modelData
+                                    text: modelData
+                                    bgColor: MD.Token.color.secondary_container
+                                    fgColor: MD.Token.color.on_secondary_container
+                                }
+                            }
+                        }
+                    }
+
                     trailing: RowLayout {
                         spacing: 4
 
+                        MD.BusyIconButton {
+                            enabled: root.selectedPlaylistDisplay() !== null
+                                  && !playlistPlaybackMutation.querying
+                            busy: playlistPlaybackMutation.querying
+                            icon.name: playlistSheetItem.playingOnSelectedDisplay
+                                ? MD.Token.icon.pause
+                                : MD.Token.icon.play_arrow
+                            onClicked: root.togglePlaylistPlayback(playlistSheetItem.modelData)
+
+                            MD.ToolTip {
+                                visible: parent.hovered && !parent.enabled
+                                text: qsTr("No displays")
+                            }
+                        }
+
                         MD.IconButton {
-                            visible: !root.isEditingPlaylist(playlistSheetItem.modelData)
                             enabled: !playlistMutation.querying
                             icon.name: MD.Token.icon.edit
                             onClicked: root.editPlaylistSelection(playlistSheetItem.modelData)
@@ -1923,7 +2102,6 @@ MD.Page {
                         }
 
                         MD.IconButton {
-                            visible: !root.isEditingPlaylist(playlistSheetItem.modelData)
                             enabled: !playlistMutation.querying
                             icon.name: MD.Token.icon.delete
                             onClicked: root.deletePlaylist(playlistSheetItem.modelData)
@@ -1931,19 +2109,6 @@ MD.Page {
                             MD.ToolTip {
                                 visible: parent.hovered
                                 text: qsTr("Delete playlist")
-                            }
-                        }
-
-                        MD.BusyIconButton {
-                            visible: root.isEditingPlaylist(playlistSheetItem.modelData)
-                            enabled: !playlistMutation.querying
-                            busy: playlistMutation.querying
-                            icon.name: MD.Token.icon.check
-                            onClicked: root.confirmPlaylistSelection(playlistSheetItem.modelData)
-
-                            MD.ToolTip {
-                                visible: parent.hovered
-                                text: qsTr("Confirm playlist")
                             }
                         }
                     }

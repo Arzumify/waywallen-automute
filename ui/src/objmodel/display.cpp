@@ -54,6 +54,19 @@ auto Display::layoutOverrideFromPb(const proto::DisplayInfo& info) -> QVariantMa
     return m;
 }
 
+auto Display::playlistStatusFromPb(const proto::PlaylistDisplayStatus* status) -> QVariantMap {
+    QVariantMap m;
+    if (! status || status->activeId() <= 0) return m;
+    m[u"activeId"_s]      = static_cast<qint64>(status->activeId());
+    m[u"mode"_s]          = static_cast<int>(status->mode());
+    m[u"intervalSecs"_s]  = status->intervalSecs();
+    m[u"currentId"_s]     = status->currentId();
+    m[u"position"_s]      = status->position();
+    m[u"count"_s]         = status->count();
+    m[u"remainingSecs"_s] = status->remainingSecs();
+    return m;
+}
+
 Display::Display(const proto::DisplayInfo& info, QObject* parent)
     : QObject(parent),
       m_id(info.displayId()),
@@ -111,6 +124,15 @@ void Display::updateFrom(const proto::DisplayInfo& info) {
     }
 }
 
+void Display::updatePlaylistStatus(const proto::PlaylistDisplayStatus* status) {
+    const auto new_active = status ? static_cast<qint64>(status->activeId()) : 0;
+    auto       new_status = playlistStatusFromPb(status);
+    if (m_active_playlist_id == new_active && m_playlist_status == new_status) return;
+    m_active_playlist_id = new_active;
+    m_playlist_status    = std::move(new_status);
+    Q_EMIT playlistStatusChanged();
+}
+
 // ---------------------------------------------------------------------------
 // DisplayManager
 // ---------------------------------------------------------------------------
@@ -139,12 +161,20 @@ auto DisplayManager::displays() const -> QVariantList {
     return out;
 }
 
+auto DisplayManager::hasActivePlaylistDisplays() const -> bool {
+    for (const auto* display : m_ordered) {
+        if (display->activePlaylistId() > 0) return true;
+    }
+    return false;
+}
+
 auto DisplayManager::get(quint64 id) const -> Display* {
     auto it = m_by_id.find(id);
     return (it == m_by_id.end()) ? nullptr : it->second;
 }
 
 void DisplayManager::replaceAll(const QList<proto::DisplayInfo>& list) {
+    const auto had_active = hasActivePlaylistDisplays();
     std::map<quint64, Display*> next_by_id;
     QList<Display*>             next_ordered;
     next_ordered.reserve(list.size());
@@ -174,6 +204,7 @@ void DisplayManager::replaceAll(const QList<proto::DisplayInfo>& list) {
 
     m_ordered = std::move(next_ordered);
     m_by_id   = std::move(next_by_id);
+    if (had_active != hasActivePlaylistDisplays()) Q_EMIT playlistStatusChanged();
     Q_EMIT displaysChanged();
 }
 
@@ -196,11 +227,26 @@ void DisplayManager::upsert(const proto::DisplayInfo& info) {
 void DisplayManager::remove(quint64 id) {
     auto it = m_by_id.find(id);
     if (it == m_by_id.end()) return;
+    const auto had_active = hasActivePlaylistDisplays();
     auto* d = it->second;
     m_by_id.erase(it);
     m_ordered.removeOne(d);
     d->deleteLater();
+    if (had_active != hasActivePlaylistDisplays()) Q_EMIT playlistStatusChanged();
     Q_EMIT displaysChanged();
+}
+
+void DisplayManager::replacePlaylistStatuses(const QList<proto::PlaylistDisplayStatus>& list) {
+    const auto had_active = hasActivePlaylistDisplays();
+    std::map<quint64, const proto::PlaylistDisplayStatus*> by_id;
+    for (const auto& status : list) {
+        by_id[status.displayId()] = &status;
+    }
+    for (auto* display : m_ordered) {
+        auto it = by_id.find(display->id());
+        display->updatePlaylistStatus(it == by_id.end() ? nullptr : it->second);
+    }
+    if (had_active != hasActivePlaylistDisplays()) Q_EMIT playlistStatusChanged();
 }
 
 void DisplayManager::attachTo(Backend* backend) {
@@ -216,6 +262,8 @@ void DisplayManager::handleEvent(const proto::Event& evt) {
         upsert(evt.displayChanged().display());
     } else if (evt.hasDisplayRemoved()) {
         remove(evt.displayRemoved().displayId());
+    } else if (evt.hasPlaylistChanged()) {
+        replacePlaylistStatuses(evt.playlistChanged().displays());
     }
 }
 

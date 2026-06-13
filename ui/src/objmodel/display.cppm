@@ -47,6 +47,8 @@ class Display : public QObject {
     // Set once at register_display time; never changes for a live display.
     Q_PROPERTY(quint32 drmRenderMajor READ drmRenderMajor CONSTANT FINAL)
     Q_PROPERTY(quint32 drmRenderMinor READ drmRenderMinor CONSTANT FINAL)
+    Q_PROPERTY(qint64 activePlaylistId READ activePlaylistId NOTIFY playlistStatusChanged FINAL)
+    Q_PROPERTY(QVariantMap playlistStatus READ playlistStatus NOTIFY playlistStatusChanged FINAL)
 
 public:
     explicit Display(const proto::DisplayInfo& info, QObject* parent = nullptr);
@@ -63,10 +65,13 @@ public:
     auto layoutOverride() const -> const QVariantMap& { return m_layout_override; }
     auto drmRenderMajor() const -> quint32 { return m_drm_render_major; }
     auto drmRenderMinor() const -> quint32 { return m_drm_render_minor; }
+    auto activePlaylistId() const -> qint64 { return m_active_playlist_id; }
+    auto playlistStatus() const -> const QVariantMap& { return m_playlist_status; }
 
     /// Diff-update from a freshly-received `DisplayInfo`. Only emits
     /// the signals for properties that actually changed.
     void updateFrom(const proto::DisplayInfo& info);
+    void updatePlaylistStatus(const proto::PlaylistDisplayStatus* status);
 
     Q_SIGNAL void nameChanged();
     Q_SIGNAL void aliasChanged();
@@ -75,11 +80,13 @@ public:
     Q_SIGNAL void refreshMhzChanged();
     Q_SIGNAL void linksChanged();
     Q_SIGNAL void layoutChanged();
+    Q_SIGNAL void playlistStatusChanged();
 
 private:
     static auto linksFromPb(const proto::DisplayInfo& info) -> QVariantList;
     static auto effectiveLayoutFromPb(const proto::DisplayInfo& info) -> QVariantMap;
     static auto layoutOverrideFromPb(const proto::DisplayInfo& info) -> QVariantMap;
+    static auto playlistStatusFromPb(const proto::PlaylistDisplayStatus* status) -> QVariantMap;
 
     quint64      m_id;
     QString      m_name;
@@ -92,6 +99,8 @@ private:
     QVariantMap  m_layout_override;
     quint32      m_drm_render_major;
     quint32      m_drm_render_minor;
+    qint64       m_active_playlist_id { 0 };
+    QVariantMap  m_playlist_status;
 };
 
 /// Singleton model for all currently-registered displays. Fed by:
@@ -107,6 +116,8 @@ class DisplayManager : public QObject {
 
     Q_PROPERTY(QVariantList displays READ displays NOTIFY displaysChanged FINAL)
     Q_PROPERTY(int count READ count NOTIFY displaysChanged FINAL)
+    Q_PROPERTY(bool hasActivePlaylistDisplays READ hasActivePlaylistDisplays NOTIFY
+                   playlistStatusChanged FINAL)
 
 public:
     DisplayManager(QObject* parent = nullptr);
@@ -118,6 +129,7 @@ public:
     /// `Display*`, suitable for QML `Repeater { model: DisplayManager.displays }`.
     auto displays() const -> QVariantList;
     auto count() const -> int { return (int)m_ordered.size(); }
+    auto hasActivePlaylistDisplays() const -> bool;
 
     Q_INVOKABLE waywallen::Display* get(quint64 id) const;
 
@@ -133,11 +145,16 @@ public:
     /// Remove by id. Emits `displaysChanged` if the id existed.
     void remove(quint64 id);
 
+    /// Full replacement of current playlist runtime state by display id.
+    /// Missing displays are treated as inactive.
+    void replacePlaylistStatuses(const QList<proto::PlaylistDisplayStatus>& list);
+
     /// Wire up to a backend's `eventReceived` signal. Call once from
     /// `App::init` after the backend is constructed.
     void attachTo(Backend* backend);
 
     Q_SIGNAL void displaysChanged();
+    Q_SIGNAL void playlistStatusChanged();
 
 private:
     void handleEvent(const proto::Event& evt);

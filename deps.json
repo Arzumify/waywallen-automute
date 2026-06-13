@@ -71,7 +71,7 @@
     }
   },
   {
-    "commit": "3b0f78a5a9bcf8ca92c107a64d89227bd76425b3",
+    "commit": "29fc0165633dd902988d2b2ca4ba5cc98e9908a3",
     "dest": "build/_flatpak_deps/qml_material-src",
     "disable-shallow-clone": true,
     "type": "git",
@@ -82,7 +82,7 @@
     }
   },
   {
-    "commit": "44672d776c04524825b565c7604d743129d4a907",
+    "commit": "26e4b4134a05d35676f02f8b0e82a6130d877695",
     "dest": "build/_flatpak_deps/QExtra-src",
     "disable-shallow-clone": true,
     "type": "git",
