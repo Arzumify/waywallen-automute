@@ -1,3 +1,20 @@
+<release version="0.2.0" date="2026-06-14">
+  <description>
+    <p>Support playlists.</p>
+    <p>Support per-wallpaper layout overrides.</p>
+    <p>Support tweak wallpaper view item.</p>
+    <p>Support wallpaper view selection.</p>
+    <p>Add wallpaper contains folder action.</p>
+    <p>Add wallpaper info action and page.</p>
+    <p>Fix properties title height.</p>
+    <p>Fix multi-plane buffer binding.</p>
+    <p>Fix Portrait orientation unusable #80.</p>
+    <p>Fix display setting for second applied to first #79.</p>
+    <p>Fix Auto-expand sidebar setting not saving #77.</p>
+    <p>Fix wallpapers sometimes pause indefinitely #61.</p>
+    <p>Thanks @burlone0 for playlists and discover pr.</p>
+  </description>
+</release>
 <release version="0.1.8" date="2026-06-04">
   <description>
     <p>Fix sometimes source plugin not show.</p>

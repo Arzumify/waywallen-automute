@@ -37,7 +37,7 @@ void RemoteAvailabilityQuery::reload() {
         if (! self) co_return;
 
         self->inspect_set(result, [self](const proto::Response& rsp) {
-            const auto& av = rsp.remoteAvailability();
+            const auto&  av = rsp.remoteAvailability();
             QVariantList sources;
             sources.reserve(av.sources().size());
             for (const auto& src : av.sources()) {

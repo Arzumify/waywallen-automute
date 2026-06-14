@@ -12,19 +12,33 @@
 #
 # Optional environment variables:
 #   WAYWALLEN_CONDA_ENV     conda env name, default "waywallen"
+#   OWE_PLUGIN_ZIP          prebuilt OWE plugin zip path or URL
 
 set -euo pipefail
 
 # Script lives in <repo>/scripts/, so PROJECT_DIR is one level up.
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_NAME="${WAYWALLEN_CONDA_ENV:-waywallen}"
+OWE_PLUGIN_VER="0.1.6"
+OWE_PLUGIN_ZIP="https://github.com/waywallen/open-wallpaper-engine/releases/download/v${OWE_PLUGIN_VER}/org.waywallen.open-wallpaper-engine-${OWE_PLUGIN_VER}-linux-x86_64.zip"
+OWE_PLUGIN_ID="org.waywallen.open-wallpaper-engine"
 APPDIR="$PROJECT_DIR/build/AppDir"
 INSTALL_DIR="$APPDIR/usr"          # AppDir's /usr is the cmake install prefix
 PLUGINS_DIR="$INSTALL_DIR/share/waywallen/plugins"
+OWE_PLUGIN_DIR="$PLUGINS_DIR/$OWE_PLUGIN_ID"
 TOOLS_DIR="$PROJECT_DIR/build/_tools"
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+append_unique_path() {
+    local -n paths_ref="$1"
+    local path="$2"
+    local existing
+    for existing in "${paths_ref[@]}"; do
+        [[ "$existing" == "$path" ]] && return
+    done
+    paths_ref+=("$path")
+}
 
 # ---- Compute the version string baked into the AppImage filename ----
 # Pull the canonical version from Cargo.toml; refine with git metadata so
@@ -61,6 +75,10 @@ command -v conda >/dev/null \
     || fail "conda not found. Install Miniconda first: https://docs.conda.io/projects/miniconda/"
 command -v cargo >/dev/null \
     || fail "cargo not found. Install rustup first: https://rustup.rs/  Then restart your shell and re-run."
+command -v curl >/dev/null \
+    || fail "curl not found. Install curl first, then re-run."
+command -v bsdtar >/dev/null \
+    || fail "bsdtar not found. Install libarchive/bsdtar first, then re-run."
 
 # ---- Set up the conda environment ----
 # Make `conda activate` available inside this script.
@@ -142,45 +160,49 @@ cmake --build build/clang-release --parallel
 step "Installing into AppDir: $APPDIR"
 cmake --install build/clang-release
 
+step "Building and installing waywallen-layer-shell"
+cargo build --package waywallen-display --bin waywallen-layer-shell --release --locked
+install -Dm755 \
+    "$PROJECT_DIR/target/release/waywallen-layer-shell" \
+    "$INSTALL_DIR/bin/waywallen-layer-shell"
+
 popd
 
-# ---- Build open-wallpaper-engine (waywallen-wescene-renderer) ----
-OWE_COMMIT="1a42f3522e26572610c953da9b902db7a7e80fd4"
-OWE_SRC="$PROJECT_DIR/build/_owe-src"
-OWE_BUILD="$PROJECT_DIR/build/_owe-build"
-
-step "Fetching open-wallpaper-engine @ $OWE_COMMIT"
-if [[ ! -d "$OWE_SRC/.git" ]]; then
-    git clone https://github.com/waywallen/open-wallpaper-engine.git "$OWE_SRC"
+# ---- Install open-wallpaper-engine prebuilt plugin into AppDir ----
+OWE_PLUGIN_ZIP_PATH="$OWE_PLUGIN_ZIP"
+if [[ "$OWE_PLUGIN_ZIP" == http://* || "$OWE_PLUGIN_ZIP" == https://* ]]; then
+    mkdir -p "$TOOLS_DIR"
+    OWE_PLUGIN_ZIP_PATH="$TOOLS_DIR/${OWE_PLUGIN_ZIP##*/}"
+    if [[ ! -f "$OWE_PLUGIN_ZIP_PATH" ]]; then
+        step "Downloading open-wallpaper-engine plugin"
+        curl -fsSL --retry 3 -o "$OWE_PLUGIN_ZIP_PATH.tmp" "$OWE_PLUGIN_ZIP"
+        mv "$OWE_PLUGIN_ZIP_PATH.tmp" "$OWE_PLUGIN_ZIP_PATH"
+    fi
 fi
-# Try a single-SHA fetch first (cheap if the server supports it), fall back
-# to a full fetch otherwise; then hard-reset to the pinned commit so the
-# tree matches even if a previous run left it on something else.
-git -C "$OWE_SRC" fetch --quiet origin "$OWE_COMMIT" 2>/dev/null \
-    || git -C "$OWE_SRC" fetch --quiet origin
-git -C "$OWE_SRC" -c advice.detachedHead=false reset --hard "$OWE_COMMIT"
-
-step "CMake configure: open-wallpaper-engine"
-cmake -S "$OWE_SRC" -B "$OWE_BUILD" \
-    -G Ninja \
-    "${CCACHE_ARGS[@]}" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_LINKER_TYPE=LLD \
-    -DCMAKE_SYSROOT="$CONDA_BUILD_SYSROOT" \
-    -DCMAKE_C_FLAGS_INIT="-pthread" \
-    -DCMAKE_CXX_FLAGS_INIT="-pthread" \
-    -DCMAKE_PREFIX_PATH="$INSTALL_DIR;$CONDA_PREFIX" \
-    -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
-    -DBUILD_WAYWALLEN_HOST=ON \
-    -DBUILD_WEWEB=ON \
-    -DBUILD_QML=OFF
-
-step "Compiling open-wallpaper-engine"
-cmake --build   "$OWE_BUILD" --parallel
-cmake --install "$OWE_BUILD"
-strip "$INSTALL_DIR/bin/weweb"/*.so
+step "Installing open-wallpaper-engine plugin from $OWE_PLUGIN_ZIP_PATH"
+[[ -f "$OWE_PLUGIN_ZIP_PATH" ]] || fail "missing OWE plugin zip: $OWE_PLUGIN_ZIP_PATH"
+rm -rf "$OWE_PLUGIN_DIR"
+mkdir -p "$OWE_PLUGIN_DIR"
+bsdtar -xf "$OWE_PLUGIN_ZIP_PATH" -C "$OWE_PLUGIN_DIR"
+[[ -f "$OWE_PLUGIN_DIR/plugin.toml" ]] \
+    || fail "OWE plugin zip did not contain plugin.toml at top level"
+OWE_RENDERER_BINS=()
+OWE_RENDERER_DIRS=()
+while IFS= read -r renderer_bin; do
+    [[ -n "$renderer_bin" ]] || continue
+    renderer_path="$OWE_PLUGIN_DIR/$renderer_bin"
+    [[ -f "$renderer_path" ]] \
+        || fail "OWE plugin renderer bin missing: $renderer_bin"
+    [[ -x "$renderer_path" ]] || chmod +x "$renderer_path"
+    [[ "$renderer_bin" == bin/weweb/* ]] && continue
+    OWE_RENDERER_BINS+=("$renderer_path")
+    append_unique_path OWE_RENDERER_DIRS "$(dirname "$renderer_path")"
+done < <(awk -F'"' '/^[[:space:]]*bin[[:space:]]*=/ { print $2 }' "$OWE_PLUGIN_DIR/plugin.toml")
+[[ "${#OWE_RENDERER_BINS[@]}" -gt 0 ]] \
+    || fail "OWE plugin manifest did not declare renderer bins"
+if compgen -G "$OWE_PLUGIN_DIR/bin/weweb/*.so" >/dev/null; then
+    strip "$OWE_PLUGIN_DIR/bin/weweb"/*.so || true
+fi
 
 # # ---- Fetch linuxdeploy / appimagetool (cached on first run under build/_tools) ----
 mkdir -p "$TOOLS_DIR"
@@ -239,8 +261,16 @@ LINUXDEPLOY=$TOOLS_DIR/squashfs-root/AppRun
 popd
 
 cd "$PROJECT_DIR/build"
+LINUXDEPLOY_EXECUTABLE_ARGS=(
+    --executable "$INSTALL_DIR/bin/waywallen-ui"
+    --executable "$INSTALL_DIR/bin/waywallen-video-renderer"
+)
+for renderer_path in "${OWE_RENDERER_BINS[@]}"; do
+    LINUXDEPLOY_EXECUTABLE_ARGS+=(--executable "$renderer_path")
+done
+OWE_RENDERER_LD_PATH="$(IFS=:; printf '%s' "${OWE_RENDERER_DIRS[*]}")"
 PATH="$TOOLS_DIR:$PATH" \
-LD_LIBRARY_PATH="$INSTALL_DIR/lib:$CONDA_PREFIX/lib" \
+LD_LIBRARY_PATH="$OWE_RENDERER_LD_PATH:$INSTALL_DIR/lib:$CONDA_PREFIX/lib" \
 QMAKE="$CONDA_PREFIX/bin/qmake6" \
 EXTRA_PLATFORM_PLUGINS="libqwayland.so" \
 EXTRA_QT_PLUGINS="wayland-decoration-client;wayland-shell-integration" \
@@ -248,9 +278,7 @@ QML_SOURCES_PATHS="$PROJECT_DIR/ui/qml" \
 "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --plugin qt \
-    --executable "$INSTALL_DIR/bin/waywallen-ui" \
-    --executable "$INSTALL_DIR/bin/waywallen-video-renderer" \
-    --executable "$INSTALL_DIR/bin/waywallen-wescene-renderer" \
+    "${LINUXDEPLOY_EXECUTABLE_ARGS[@]}" \
     --desktop-file "$DESKTOP_FILE" \
     --icon-file "$ICON_FILE" \
     --custom-apprun "$APPRUN_TMP"

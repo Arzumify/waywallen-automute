@@ -50,14 +50,13 @@ MD.ApplicationWindow {
     readonly property var pageModel: [
         { icon: MD.Token.icon.wallpaper, name: "Wallpapers" },
         { icon: MD.Token.icon.monitor, name: "Displays" },
-        { icon: MD.Token.icon.search, name: "Discover" },
         { icon: MD.Token.icon.monitor_heart, name: "Status" }
     ]
 
 
-    readonly property var pageComponents: ["qrc:/waywallen/ui/qml/page/WallpaperPage.qml", "qrc:/waywallen/ui/qml/page/DisplaysPage.qml", "qrc:/waywallen/ui/qml/page/DiscoverPage.qml", "qrc:/waywallen/ui/qml/page/StatusPage.qml"]
+    readonly property var pageComponents: ["qrc:/waywallen/ui/qml/page/WallpaperPage.qml", "qrc:/waywallen/ui/qml/page/DisplaysPage.qml", "qrc:/waywallen/ui/qml/page/StatusPage.qml"]
 
-    readonly property var pageCacheable: [true, false, true, false]
+    readonly property var pageCacheable: [true, false, false]
 
     onCurrentPageChanged: {
         m_content.switchTo(pageComponents[currentPage], {}, pageCacheable[currentPage]);

@@ -143,8 +143,7 @@ public:
     Q_SIGNAL void accepted(const QString& sourceId, const QString& id);
     Q_SIGNAL void rejected(const QString& sourceId, const QString& id, const QString& error);
     Q_SIGNAL void uninstalled(const QString& sourceId, const QString& id);
-    Q_SIGNAL void uninstallFailed(const QString& sourceId, const QString& id,
-                                  const QString& error);
+    Q_SIGNAL void uninstallFailed(const QString& sourceId, const QString& id, const QString& error);
 };
 
 } // namespace waywallen

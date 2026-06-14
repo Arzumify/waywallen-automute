@@ -32,10 +32,9 @@ QVariant RemoteListModel::data(const QModelIndex& index, int role) const {
 
 QHash<int, QByteArray> RemoteListModel::roleNames() const {
     return {
-        { ItemIdRole, "itemId"_ba },         { SourceIdRole, "sourceId"_ba },
-        { TitleRole, "title"_ba },
-        { PreviewUrlRole, "previewUrl"_ba }, { AuthorRole, "author"_ba },
-        { InstalledRole, "installed"_ba },
+        { ItemIdRole, "itemId"_ba }, { SourceIdRole, "sourceId"_ba },
+        { TitleRole, "title"_ba },   { PreviewUrlRole, "previewUrl"_ba },
+        { AuthorRole, "author"_ba }, { InstalledRole, "installed"_ba },
     };
 }
 

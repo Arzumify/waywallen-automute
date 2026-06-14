@@ -28,7 +28,6 @@ This produces under `install/`:
 ```
 install/bin/
     waywallen                          # daemon (Rust)
-    waywallen-layer-shell              # wlroots adapter (Rust)
     waywallen-ui                       # Qt/QML UI
 install/share/waywallen/plugins/
     org.waywallen.image/{plugin.toml, files.txt, image.lua, bin/waywallen-image-renderer}
@@ -37,6 +36,14 @@ install/share/{applications,metainfo,icons/...}/
 ```
 
 The CMake build type maps to a Cargo profile: `Debug` → `cargo --profile dev`, `Release` / `RelWithDebInfo` → `cargo --release`.
+
+`waywallen-layer-shell` lives in the `waywallen-display` Cargo package. It is
+not built or installed by the normal CMake flow; packaging scripts that bundle
+the display backend build it explicitly with:
+
+```bash
+cargo build --package waywallen-display --bin waywallen-layer-shell --release
+```
 
 To skip components: `-DWAYWALLEN_BUILD_DAEMON=OFF`, `-DWAYWALLEN_BUILD_UI=OFF`, `-DWAYWALLEN_BUILD_PLUGINS=OFF`.
 

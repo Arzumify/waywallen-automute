@@ -2,7 +2,7 @@
 #
 # Produces DEB / RPM / TGZ packages via `cpack -G <gen>` after a normal
 # install. Components map to the installer chunks defined here:
-#   * Daemon  — Rust binaries (waywallen, waywallen-layer-shell)
+#   * Daemon  — Rust daemon binary
 #   * UI      — Qt/QML executable + .desktop / icons / metainfo
 #   * Plugins — image + mpv renderer subprocesses and their manifests
 #   * Bridge  — C ABI headers + import lib (devel; opt-in)
