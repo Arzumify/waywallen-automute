@@ -284,22 +284,8 @@ async fn apply_wallpaper_core(
     // separate JSON blob in `Init.user_properties`; daemon-owned
     // display layout keys are consumed below as wallpaper-local layout
     // overrides.
-    let mut user_properties_json: Option<String> = None;
-    let mut wallpaper_layout_override = Default::default();
-    if !entry.library_root.is_empty() {
-        if let Some(rel) = crate::queue::relative_under_root(&entry.library_root, &entry.resource) {
-            if let Ok(Some(it)) =
-                repo::find_item_by_library_path(&app.db, &entry.library_root, &rel).await
-            {
-                if let Ok((renderer_json, layout)) =
-                    repo::get_wallpaper_render_properties(&app.db, it.id).await
-                {
-                    user_properties_json = renderer_json;
-                    wallpaper_layout_override = layout;
-                }
-            }
-        }
-    }
+    let (user_properties_json, wallpaper_layout_override) =
+        repo::get_wallpaper_render_properties(&app.db, entry.item_id).await?;
     let spawn_req = renderer_manager::SpawnRequest {
         wp_type: entry.wp_type.clone(),
         extras,
@@ -343,18 +329,7 @@ async fn apply_wallpaper_core(
         let mut q = app.queue.lock().await;
         q.current = Some(entry.item_id.to_string());
         // Stash the DB id so sequential / random stepping has an anchor.
-        // Best-effort: lookup may fail if sync hasn't picked the entry up.
-        if !entry.library_root.is_empty() {
-            if let Some(rel) =
-                crate::queue::relative_under_root(&entry.library_root, &entry.resource)
-            {
-                if let Ok(Some(it)) =
-                    repo::find_item_by_library_path(&app.db, &entry.library_root, &rel).await
-                {
-                    q.last_db_id = Some(it.id);
-                }
-            }
-        }
+        q.last_db_id = Some(entry.item_id);
     }
 
     // Persist per-display (the actual targets) plus the global

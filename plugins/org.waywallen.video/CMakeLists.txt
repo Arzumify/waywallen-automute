@@ -19,6 +19,7 @@ target_link_libraries(waywallen-video-renderer
         waywallen::bridge
         wavsen::video
         wavsen::audio
+        waywallen-plugin-json
         rstd::log
         Vulkan::Vulkan
         Threads::Threads

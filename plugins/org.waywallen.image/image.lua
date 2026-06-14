@@ -20,6 +20,16 @@ function M.info()
     }
 end
 
+function M.properties()
+    return {
+        ["waywallen.scheme_color"] = {
+            text = "Scheme color",
+            type = "color",
+            value = {0.0, 0.0, 0.0, 1.0},
+        },
+    }
+end
+
 -- Formats the renderer can decode today. GIF decodes its first frame in M1;
 -- animated GIF/APNG/WebP pacing lands in M5 so we still list them — a
 -- single-frame wallpaper is a reasonable fallback.

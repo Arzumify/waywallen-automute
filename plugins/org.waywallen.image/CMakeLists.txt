@@ -24,6 +24,7 @@ target_link_libraries(waywallen-image-renderer
     PRIVATE
         waywallen::bridge
         wavsen::video
+        waywallen-plugin-json
         rstd::log
         PkgConfig::AVFORMAT
         PkgConfig::AVCODEC

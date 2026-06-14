@@ -9,6 +9,7 @@
 import rstd.cppstd;
 import rstd.log;
 import wavsen.video;
+import nlohmann.json;
 
 #include <rstd/macro.hpp>
 
@@ -21,9 +22,13 @@ import wavsen.video;
 
 #include "av_image.hpp"
 
+#include <cmath>
 #include <errno.h>
 #include <signal.h>
 #include <string.h>
+
+#include <ctype.h>
+#include <stdlib.h>
 
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -47,9 +52,55 @@ struct Options {
     std::string render_node;
 };
 
+struct ClearColor {
+    float r { 0.0f };
+    float g { 0.0f };
+    float b { 0.0f };
+    float a { 1.0f };
+};
+
+constexpr const char* kSchemeColorKey = "waywallen.scheme_color";
+
 [[noreturn]] void die(const std::string& msg) {
     rstd_error("waywallen-image-renderer: {}", msg);
     std::exit(1);
+}
+
+float clamp01(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+bool parse_color_wire(const char* raw, ClearColor& out) {
+    if (! raw || ! *raw) return false;
+    std::string s = raw;
+    for (char& ch : s) {
+        if (ch == ',') ch = ' ';
+    }
+
+    float       values[4] = {};
+    int         count     = 0;
+    const char* p         = s.c_str();
+    while (*p) {
+        while (*p && std::isspace(static_cast<unsigned char>(*p))) ++p;
+        if (! *p) break;
+        if (count >= 4) return false;
+        errno     = 0;
+        char* end = nullptr;
+        float v   = std::strtof(p, &end);
+        if (end == p || errno == ERANGE || ! std::isfinite(v)) return false;
+        values[count++] = clamp01(v);
+        p               = end;
+    }
+    if (count < 3) return false;
+    out = ClearColor {
+        .r = values[0],
+        .g = values[1],
+        .b = values[2],
+        .a = count >= 4 ? values[3] : 1.0f,
+    };
+    return true;
 }
 
 // SPAWN_VERSION 3: argv carries the canonical `--path` for the image
@@ -97,11 +148,13 @@ struct HostState {
     std::condition_variable neg_cv;
     bool                    neg_pending { false };
     ww_pool_directive_t     neg_directive {};
+    std::mutex              send_mu;
 
     /* Cached RGBA buffer (kept alive across re-negotiations so we
      * can re-upload after a directive change). */
     const uint8_t* rgba_data { nullptr };
     size_t         rgba_size { 0 };
+    ClearColor     scheme_color {};
 };
 
 void signal_shutdown(HostState& s) {
@@ -216,7 +269,8 @@ bool upload_to_slot(HostState& host, wavsen::video::Producer& producer,
                    std::move(upload_res).unwrap_err().message);
         return false;
     }
-    int sync_fd = std::move(upload_res).unwrap();
+    int                         sync_fd = std::move(upload_res).unwrap();
+    std::lock_guard<std::mutex> send_lk(host.send_mu);
     if (int rc = ww_bridge_pool_submit_slot(host.pool, host.sock, slot_index, sync_fd); rc != 0) {
         rstd_error("waywallen-image-renderer: submit_slot rc={}", rc);
         return false;
@@ -224,12 +278,58 @@ bool upload_to_slot(HostState& host, wavsen::video::Producer& producer,
     return true;
 }
 
+void publish_clear_color(HostState& host, const ClearColor& c) {
+    std::lock_guard<std::mutex> send_lk(host.send_mu);
+    if (int rc = ww_bridge_send_report_state_clear_color(host.sock, c.r, c.g, c.b, c.a); rc != 0) {
+        rstd_warn("waywallen-image-renderer: report_state(clear_color) failed ({})", rc);
+    }
+}
+
+void set_scheme_color(HostState& host, const char* value, bool publish) {
+    ClearColor next {};
+    if (value && *value && ! parse_color_wire(value, next)) {
+        rstd_warn("waywallen-image-renderer: invalid {} value '{}'; ignoring",
+                  static_cast<const char*>(kSchemeColorKey),
+                  static_cast<const char*>(value));
+        return;
+    }
+    host.scheme_color = next;
+    if (publish) publish_clear_color(host, host.scheme_color);
+}
+
+void apply_user_properties(HostState& host, const char* json) {
+    if (! json || ! *json) return;
+    auto parsed = nlohmann::json::parse(json,
+                                        /*cb*/ nullptr,
+                                        /*allow_exceptions*/ false,
+                                        /*ignore_comments*/ true);
+    if (! parsed.is_object()) {
+        if (! parsed.is_discarded()) {
+            rstd_warn("waywallen-image-renderer: init.user_properties is not an object; ignored");
+        }
+        return;
+    }
+    const auto it = parsed.find(kSchemeColorKey);
+    if (it == parsed.end()) return;
+    if (it->is_string()) {
+        const auto value = it->get<std::string>();
+        set_scheme_color(host, value.c_str(), false);
+    } else {
+        rstd_warn("waywallen-image-renderer: {} is not a string; ignored",
+                  static_cast<const char*>(kSchemeColorKey));
+    }
+}
+
 /* Apply a directive received from the daemon. After bridge brings the
  * slots up, upload our cached RGBA into slot 0 and submit one frame.
  * Static images: a single submit per (re-)negotiation is enough. */
 void apply_negotiate_request(HostState& host, wavsen::video::Producer& producer,
                              const ww_pool_directive_t& d) {
-    int rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+    int rc = 0;
+    {
+        std::lock_guard<std::mutex> send_lk(host.send_mu);
+        rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+    }
     if (rc != 0) {
         rstd_error("waywallen-image-renderer: pool_apply_directive failed: {}", rc);
         if (rc > 0) signal_shutdown(host);
@@ -267,17 +367,19 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
         // permissive in case a misconfigured daemon forwards anyway.
         break;
     case WW_EVT_IN_SETTING_CHANGED: {
-        // The image renderer's manifest declares no settings, so an
-        // ApplySettings should arrive empty. If the daemon sends a
-        // non-empty kv list (e.g. the user added a tunable key in
-        // `settings.toml` that no schema declares), warn-log and
-        // discard so we don't surprise the user with silent drops.
         ww_bridge_setting_changed_t as {};
         if (ww_bridge_setting_changed_from_control(&c, &as) == 0) {
-            if (as.settings.count > 0) {
-                rstd_warn("waywallen-image-renderer: ApplySettings with {} keys "
-                          "but no hot-reloadable settings; ignoring",
-                          as.settings.count);
+            for (uint32_t i = 0; i < as.settings.count; ++i) {
+                const char* key = as.settings.data[i].key;
+                const char* val = as.settings.data[i].value;
+                if (! key || ! val) continue;
+                if (std::strcmp(key, kSchemeColorKey) == 0) {
+                    set_scheme_color(host, val, true);
+                } else {
+                    rstd_warn("waywallen-image-renderer: ApplySettings: unknown key '{}'; "
+                              "ignoring",
+                              static_cast<const char*>(key));
+                }
             }
             ww_bridge_setting_changed_free(&as);
         }
@@ -332,8 +434,7 @@ void reader_loop(HostState& host) {
 // ---------------------------------------------------------------------------
 
 // Emit a single JSON document on stdout that mirrors the
-// `PeerCapsJson` shape consumed by `dmabuf_roundtrip_e2e`. Hand-rolled
-// (no nlohmann dep) because the schema is tiny and stable. Keep the
+// `PeerCapsJson` shape consumed by `dmabuf_roundtrip_e2e`. Keep the
 // field names and ordering in sync with
 // `displays/dump-test/src/main.rs::PeerCapsJson`.
 //
@@ -609,6 +710,7 @@ int main(int argc, char** argv) {
                                                   : static_cast<uint32_t>(WW_RESOLUTION_1080P);
         }
     }
+    apply_user_properties(host, init.user_properties);
     ww_bridge_init_free(&init);
 
     /* --- Decode + Vulkan setup --- */
@@ -679,15 +781,7 @@ int main(int argc, char** argv) {
         rc != 0)
         die("ww_bridge_pool_advertise_caps failed: " + std::to_string(rc));
 
-    // Renderer is the sole authority for the daemon's display
-    // letterbox color. Image producers have no scene-level color, so
-    // we publish opaque black; the daemon falls back to the same
-    // value when the renderer never publishes, but being explicit
-    // keeps the wire shape uniform.
-    if (int rc = ww_bridge_send_report_state_clear_color(host.sock, 0.0f, 0.0f, 0.0f, 1.0f);
-        rc != 0) {
-        rstd_warn("waywallen-image-renderer: report_state(clear_color) failed ({})", rc);
-    }
+    publish_clear_color(host, host.scheme_color);
     rstd_info("waywallen-image-renderer: ready, advertised caps, "
               "waiting for NegotiateBuffers");
 

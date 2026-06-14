@@ -14,6 +14,7 @@ import rstd.cppstd;
 import rstd.log;
 import wavsen.video;
 import wavsen.audio;
+import nlohmann.json;
 
 #include <rstd/macro.hpp>
 
@@ -23,9 +24,13 @@ import wavsen.audio;
 #include <waywallen-bridge/probe_vk.h>
 #include <waywallen-bridge/resolution.h>
 
+#include <cmath>
 #include <errno.h>
 #include <signal.h>
 #include <string.h>
+
+#include <ctype.h>
+#include <stdlib.h>
 
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -47,9 +52,55 @@ struct Options {
     bool        selftest { false };
 };
 
+struct ClearColor {
+    float r { 0.0f };
+    float g { 0.0f };
+    float b { 0.0f };
+    float a { 1.0f };
+};
+
+constexpr const char* kSchemeColorKey = "waywallen.scheme_color";
+
 [[noreturn]] void die(const std::string& msg) {
     rstd_error("waywallen-video-renderer: {}", msg);
     std::exit(1);
+}
+
+float clamp01(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+bool parse_color_wire(const char* raw, ClearColor& out) {
+    if (! raw || ! *raw) return false;
+    std::string s = raw;
+    for (char& ch : s) {
+        if (ch == ',') ch = ' ';
+    }
+
+    float       values[4] = {};
+    int         count     = 0;
+    const char* p         = s.c_str();
+    while (*p) {
+        while (*p && std::isspace(static_cast<unsigned char>(*p))) ++p;
+        if (! *p) break;
+        if (count >= 4) return false;
+        errno     = 0;
+        char* end = nullptr;
+        float v   = std::strtof(p, &end);
+        if (end == p || errno == ERANGE || ! std::isfinite(v)) return false;
+        values[count++] = clamp01(v);
+        p               = end;
+    }
+    if (count < 3) return false;
+    out = ClearColor {
+        .r = values[0],
+        .g = values[1],
+        .b = values[2],
+        .a = count >= 4 ? values[3] : 1.0f,
+    };
+    return true;
 }
 
 // SPAWN_VERSION 3: video path arrives via `--path`; everything else
@@ -105,6 +156,7 @@ struct HostState {
     std::condition_variable neg_cv;
     bool                    neg_pending { false };
     ww_pool_directive_t     neg_directive {};
+    std::mutex              send_mu;
 
     std::atomic<bool> loop_pending { false };
     std::atomic<bool> loop_value { true };
@@ -121,6 +173,7 @@ struct HostState {
     std::atomic<bool>     volume_pending { false };
     std::atomic<bool>     pending_enable_audio { true };
     std::atomic<bool>     enable_audio_pending { false };
+    ClearColor            scheme_color {};
 };
 
 wavsen::video::HwAccel parse_hwdec(const char* v) {
@@ -153,6 +206,48 @@ const char* kind_label(wavsen::video::FrameKind k) {
 void signal_shutdown(HostState& s) {
     s.shutdown.store(true, std::memory_order_release);
     s.neg_cv.notify_all();
+}
+
+void publish_clear_color(HostState& host, const ClearColor& c) {
+    std::lock_guard<std::mutex> send_lk(host.send_mu);
+    if (int rc = ww_bridge_send_report_state_clear_color(host.sock, c.r, c.g, c.b, c.a); rc != 0) {
+        rstd_warn("waywallen-video-renderer: report_state(clear_color) failed ({})", rc);
+    }
+}
+
+void set_scheme_color(HostState& host, const char* value, bool publish) {
+    ClearColor next {};
+    if (value && *value && ! parse_color_wire(value, next)) {
+        rstd_warn("waywallen-video-renderer: invalid {} value '{}'; ignoring",
+                  static_cast<const char*>(kSchemeColorKey),
+                  static_cast<const char*>(value));
+        return;
+    }
+    host.scheme_color = next;
+    if (publish) publish_clear_color(host, host.scheme_color);
+}
+
+void apply_user_properties(HostState& host, const char* json) {
+    if (! json || ! *json) return;
+    auto parsed = nlohmann::json::parse(json,
+                                        /*cb*/ nullptr,
+                                        /*allow_exceptions*/ false,
+                                        /*ignore_comments*/ true);
+    if (! parsed.is_object()) {
+        if (! parsed.is_discarded()) {
+            rstd_warn("waywallen-video-renderer: init.user_properties is not an object; ignored");
+        }
+        return;
+    }
+    const auto it = parsed.find(kSchemeColorKey);
+    if (it == parsed.end()) return;
+    if (it->is_string()) {
+        const auto value = it->get<std::string>();
+        set_scheme_color(host, value.c_str(), false);
+    } else {
+        rstd_warn("waywallen-video-renderer: {} is not a string; ignored",
+                  static_cast<const char*>(kSchemeColorKey));
+    }
 }
 
 void apply_control(HostState& host, ww_bridge_control_t& c) {
@@ -195,6 +290,8 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
                             std::strcmp(val, "no") == 0);
                 host.pending_enable_audio.store(v, std::memory_order_release);
                 host.enable_audio_pending.store(true, std::memory_order_release);
+            } else if (std::strcmp(key, kSchemeColorKey) == 0) {
+                set_scheme_color(host, val, true);
             } else {
                 rstd_warn("waywallen-video-renderer: ApplySettings: unknown key '{}'; ignoring",
                           static_cast<const char*>(key));
@@ -521,6 +618,7 @@ int main(int argc, char** argv) {
         resolution        = (end != v) ? ww_resolution_sanitize(static_cast<uint32_t>(n))
                                        : static_cast<uint32_t>(WW_RESOLUTION_1080P);
     }
+    apply_user_properties(host, init.user_properties);
     ww_bridge_init_free(&init);
     if (opt.video_path.empty()) die("--path <video-file> is required");
 
@@ -659,11 +757,7 @@ int main(int argc, char** argv) {
         rc != 0)
         die("ww_bridge_pool_advertise_caps failed: " + std::to_string(rc));
 
-    // Renderer is the sole authority for the daemon's letterbox color.
-    if (int rc = ww_bridge_send_report_state_clear_color(host.sock, 0.0f, 0.0f, 0.0f, 1.0f);
-        rc != 0) {
-        rstd_warn("waywallen-video-renderer: report_state(clear_color) failed ({})", rc);
-    }
+    publish_clear_color(host, host.scheme_color);
     rstd_info("waywallen-video-renderer: ready ({}x{}, loop={}, GPU YUV→RGB), "
               "waiting for NegotiateBuffers",
               even_w,
@@ -684,7 +778,11 @@ int main(int argc, char** argv) {
             ww_pool_directive_t d = host.neg_directive;
             host.neg_pending      = false;
             lk.unlock();
-            int rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+            int rc = 0;
+            {
+                std::lock_guard<std::mutex> send_lk(host.send_mu);
+                rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+            }
             if (rc != 0) {
                 rstd_error("waywallen-video-renderer: pool_apply_directive (initial) rc={}", rc);
                 signal_shutdown(host);
@@ -717,7 +815,11 @@ int main(int argc, char** argv) {
                 ww_pool_directive_t d = host.neg_directive;
                 host.neg_pending      = false;
                 lk.unlock();
-                int rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+                int rc = 0;
+                {
+                    std::lock_guard<std::mutex> send_lk(host.send_mu);
+                    rc = ww_bridge_pool_apply_directive(host.pool, host.sock, &d);
+                }
                 if (rc != 0) {
                     rstd_error("waywallen-video-renderer: pool_apply_directive (re) rc={}", rc);
                     if (rc > 0) {
@@ -942,6 +1044,7 @@ int main(int argc, char** argv) {
             break;
         }
         sync_fd = std::move(cv_res).unwrap();
+        std::lock_guard<std::mutex> send_lk(host.send_mu);
         if (int rc = ww_bridge_pool_submit_slot(host.pool, host.sock, slot, sync_fd); rc != 0) {
             rstd_error("waywallen-video-renderer: submit_slot rc={}", rc);
             signal_shutdown(host);

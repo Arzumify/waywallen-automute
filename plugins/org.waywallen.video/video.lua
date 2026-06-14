@@ -19,6 +19,16 @@ function M.info()
     }
 end
 
+function M.properties()
+    return {
+        ["waywallen.scheme_color"] = {
+            text = "Scheme color",
+            type = "color",
+            value = {0.0, 0.0, 0.0, 1.0},
+        },
+    }
+end
+
 local VIDEO_EXTS = {
     mp4 = true, m4v = true, mkv = true, webm = true,
     mov = true, avi = true, flv = true, wmv = true,
