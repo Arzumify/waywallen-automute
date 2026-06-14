@@ -1,0 +1,4 @@
+main.lua
+plugin.toml
+wallhaven/api.lua
+wallhaven/map.lua

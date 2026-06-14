@@ -623,16 +623,24 @@ message DisplayRenameResponse {
 }
 
 message RemoteAvailabilityRequest {}
-message RemoteAvailabilityResponse {
-  bool   owned = 1;
-  string content_dir = 2;
+
+message RemoteSortOption {
+  string key = 1;
+  string label = 2;
 }
 
-enum RemoteSort {
-  REMOTE_SORT_UNSPECIFIED = 0;
-  REMOTE_SORT_TREND = 1;
-  REMOTE_SORT_RECENT = 2;
-  REMOTE_SORT_POPULAR = 3;
+message RemoteSourceInfo {
+  string id = 1;
+  string name = 2;
+  bool supports_search = 3;
+  repeated RemoteSortOption sorts = 4;
+  repeated string tags = 5;
+  string content_dir = 6;
+}
+
+message RemoteAvailabilityResponse {
+  repeated RemoteSourceInfo sources = 1;
+  string default_source_id = 2;
 }
 
 message RemoteItem {
@@ -641,13 +649,15 @@ message RemoteItem {
   string preview_url = 3;
   string author = 4;
   bool   installed = 5;
+  string source_id = 6;
 }
 
 message RemoteSearchRequest {
-  string query = 1;
-  RemoteSort sort = 2;
-  uint32 page = 3;
-  repeated string required_tags = 4;
+  string source_id = 1;
+  string query = 2;
+  string sort_key = 3;
+  uint32 page = 4;
+  repeated string required_tags = 5;
 }
 message RemoteSearchResponse {
   repeated RemoteItem items = 1;
@@ -655,19 +665,28 @@ message RemoteSearchResponse {
   string error = 3;
 }
 
-message RemoteDownloadRequest { string id = 1; }
+message RemoteDownloadRequest {
+  string source_id = 1;
+  string id = 2;
+}
 message RemoteDownloadResponse {
   bool   accepted = 1;
   string error = 2;
 }
 
-message RemoteUninstallRequest { string id = 1; }
+message RemoteUninstallRequest {
+  string source_id = 1;
+  string id = 2;
+}
 message RemoteUninstallResponse {
   bool   removed = 1;
   string error = 2;
 }
 
-message RemoteDetailsRequest { string id = 1; }
+message RemoteDetailsRequest {
+  string source_id = 1;
+  string id = 2;
+}
 message RemoteDetailsResponse {
   string description = 1;
   string size = 2;
@@ -684,9 +703,10 @@ enum RemoteDownloadState {
   REMOTE_DOWNLOAD_STATE_ERROR = 5;
 }
 message RemoteDownloadProgress {
-  string id = 1;
-  RemoteDownloadState state = 2;
-  string error = 3;
+  string source_id = 1;
+  string id = 2;
+  RemoteDownloadState state = 3;
+  string error = 4;
 }
 
 message DisplayListRequest {}

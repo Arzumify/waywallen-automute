@@ -81,10 +81,11 @@ using proto::RemoteDownloadResponse;
 using proto::RemoteItem;
 using proto::RemoteSearchRequest;
 using proto::RemoteSearchResponse;
+using proto::RemoteSortOption;
+using proto::RemoteSourceInfo;
 using proto::RemoteUninstallRequest;
 using proto::RemoteUninstallResponse;
 using proto::RemoteDownloadStateGadget::RemoteDownloadState;
-using proto::RemoteSortGadget::RemoteSort;
 
 using proto::GpuInfo;
 using proto::GpuListRequest;

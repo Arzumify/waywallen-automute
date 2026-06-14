@@ -98,7 +98,8 @@ Q_SIGNALS:
     /// turns this into a toast.
     void displayConnectionFailed(const QString& clientName, quint32 clientProtocolVersion,
                                  quint32 errorCode, const QString& reason);
-    void remoteDownloadProgress(const QString& id, int state, const QString& error);
+    void remoteDownloadProgress(const QString& sourceId, const QString& id, int state,
+                                const QString& error);
     void playlistChanged();
 
 private:

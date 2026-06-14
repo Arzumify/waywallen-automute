@@ -83,7 +83,8 @@ Notify::Notify(QObject* parent): QObject(parent) {
                     f.clientName(), f.clientProtocolVersion(), f.errorCode(), f.reason());
             } else if (evt.hasRemoteDownloadProgress()) {
                 const auto& p = evt.remoteDownloadProgress();
-                Q_EMIT remoteDownloadProgress(p.id_proto(), static_cast<int>(p.state()), p.error());
+                Q_EMIT remoteDownloadProgress(
+                    p.sourceId(), p.id_proto(), static_cast<int>(p.state()), p.error());
             } else if (evt.hasPlaylistChanged()) {
                 Q_EMIT playlistChanged();
             }

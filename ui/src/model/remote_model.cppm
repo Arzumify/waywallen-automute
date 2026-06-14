@@ -13,6 +13,7 @@ namespace waywallen::model
 {
 
 export struct RemoteRow {
+    QString sourceId;
     QString id;
     QString title;
     QString previewUrl;
@@ -30,6 +31,7 @@ public:
     enum Role
     {
         ItemIdRole = Qt::UserRole + 1,
+        SourceIdRole,
         TitleRole,
         PreviewUrlRole,
         AuthorRole,
@@ -46,7 +48,7 @@ public:
 
     void             reset(QList<RemoteRow> rows);
     void             append(const QList<RemoteRow>& rows);
-    Q_INVOKABLE void setInstalled(const QString& id, bool installed);
+    Q_INVOKABLE void setInstalled(const QString& sourceId, const QString& id, bool installed);
 
     Q_INVOKABLE QVariantMap get(int row) const;
 

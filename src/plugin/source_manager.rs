@@ -4,8 +4,8 @@ use crate::error::{Error, Result};
 use mlua::prelude::*;
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::model::repo;
 use crate::probe::media::{AvFormatProbe, MediaProbe};
@@ -13,6 +13,39 @@ use crate::wallpaper_type::{WallpaperEntry, WallpaperType};
 
 /// User-Agent the `ctx.http` default client sends.
 const WAYWALLEN_HTTP_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) waywallen";
+
+fn resolve_plugin_import(root: &Path, name: &str) -> LuaResult<PathBuf> {
+    let mut rel = PathBuf::new();
+    for part in name.split('.') {
+        if part.is_empty()
+            || part == ".."
+            || part.contains('/')
+            || part.contains('\\')
+            || part == "."
+        {
+            return Err(LuaError::RuntimeError(format!(
+                "invalid import module name: {name}"
+            )));
+        }
+        rel.push(part);
+    }
+
+    let candidates = [
+        root.join(&rel).with_extension("lua"),
+        root.join(&rel).join("init.lua"),
+    ];
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let path = candidate.canonicalize().map_err(LuaError::external)?;
+        if path.starts_with(root) {
+            return Ok(path);
+        }
+    }
+
+    Err(LuaError::RuntimeError(format!("module not found: {name}")))
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -77,6 +110,27 @@ pub struct DiscoverDetails {
     pub extra: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct DiscoverSearchResult {
+    pub items: Vec<DiscoverItem>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DiscoverDownload {
+    pub url: String,
+    pub filename: String,
+    pub title: String,
+    pub preview_url: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub external_id: String,
+    pub size: Option<i64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub content_rating: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // SourceManager
 // ---------------------------------------------------------------------------
@@ -101,12 +155,11 @@ pub struct SourceManager {
 
 // mlua with the `send` feature makes Lua: Send.
 // We wrap SourceManager in Arc<TokioMutex<>> so this is required.
-const _: () = {
+fn assert_source_manager_send() {
     fn assert_send<T: Send>() {}
-    fn check() {
-        assert_send::<SourceManager>();
-    }
-};
+    assert_send::<SourceManager>();
+}
+const _: fn() = assert_source_manager_send;
 
 impl SourceManager {
     pub fn new() -> Result<Self> {
@@ -134,15 +187,62 @@ impl SourceManager {
         self.db = Some(db);
     }
 
+    fn plugin_lua_env(&self, root: &Path) -> Result<LuaTable> {
+        let root = root
+            .canonicalize()
+            .map_err(|e| Error::Internal(anyhow!("canonicalize {}: {e}", root.display())))?;
+        let root = Arc::new(root);
+        let cache: Arc<StdMutex<HashMap<PathBuf, LuaRegistryKey>>> =
+            Arc::new(StdMutex::new(HashMap::new()));
+
+        let env = self.lua.create_table()?;
+        let mt = self.lua.create_table()?;
+        mt.set("__index", self.lua.globals())?;
+        env.set_metatable(Some(mt));
+
+        let import_env = env.clone();
+        let import_root = root.clone();
+        let import_cache = cache.clone();
+        let import_fn = self.lua.create_function(move |lua, name: String| {
+            let path = resolve_plugin_import(&import_root, &name)?;
+            {
+                let cache = import_cache
+                    .lock()
+                    .map_err(|_| LuaError::RuntimeError("import cache poisoned".to_string()))?;
+                if let Some(key) = cache.get(&path) {
+                    return lua.registry_value::<LuaValue>(key);
+                }
+            }
+
+            let source = std::fs::read_to_string(&path).map_err(LuaError::external)?;
+            let value: LuaValue = lua
+                .load(&source)
+                .set_name(path.to_string_lossy())
+                .set_environment(import_env.clone())
+                .eval()?;
+            let key = lua.create_registry_value(value)?;
+            let mut cache = import_cache
+                .lock()
+                .map_err(|_| LuaError::RuntimeError("import cache poisoned".to_string()))?;
+            cache.insert(path.clone(), key);
+            lua.registry_value::<LuaValue>(cache.get(&path).expect("cached import"))
+        })?;
+        env.set("import", import_fn)?;
+        Ok(env)
+    }
+
     /// Load a single `.lua` source plugin, tagging it with the owning
     /// installable plugin's domain id. Returns the source plugin name.
     pub fn load_plugin(&mut self, path: &Path, plugin_id: &str) -> Result<String> {
         let source = std::fs::read_to_string(path)
             .map_err(|e| Error::Internal(anyhow!("read {}: {e}", path.display())))?;
+        let root = path.parent().unwrap_or_else(|| Path::new("."));
+        let env = self.plugin_lua_env(root)?;
         let module: LuaTable = self
             .lua
             .load(&source)
             .set_name(path.to_string_lossy())
+            .set_environment(env)
             .eval()
             .map_err(|e| Error::Internal(anyhow!("eval {}: {e}", path.display())))?;
 
@@ -760,7 +860,7 @@ impl SourceManager {
 
     /// Relay a discover/search request to a plugin's `discover(ctx, params)`
     /// Lua function. `params` is `{ query, sort, page, tags }`. The plugin
-    /// returns an array of `{ id, title, preview_url, author, extra }`.
+    /// returns `{ items = {...}, has_more = bool }`.
     pub async fn call_discover(
         &self,
         plugin_name: &str,
@@ -768,7 +868,7 @@ impl SourceManager {
         sort: &str,
         page: u32,
         tags: &[String],
-    ) -> Result<Vec<DiscoverItem>> {
+    ) -> Result<DiscoverSearchResult> {
         let key = self
             .plugins
             .get(plugin_name)
@@ -799,7 +899,10 @@ impl SourceManager {
                 })?;
 
         let mut items = Vec::new();
-        for row in result.sequence_values::<LuaTable>().flatten() {
+        let item_rows = result
+            .get::<LuaTable>("items")
+            .unwrap_or_else(|_| result.clone());
+        for row in item_rows.sequence_values::<LuaTable>().flatten() {
             items.push(DiscoverItem {
                 id: row.get("id").unwrap_or_default(),
                 title: row.get("title").unwrap_or_default(),
@@ -808,7 +911,10 @@ impl SourceManager {
                 extra: parse_lua_string_map(&row, "extra"),
             });
         }
-        Ok(items)
+        Ok(DiscoverSearchResult {
+            items,
+            has_more: result.get("has_more").unwrap_or(false),
+        })
     }
 
     /// Relay a detail request to a plugin's `details(ctx, id)` Lua function.
@@ -836,6 +942,43 @@ impl SourceManager {
             size: result.get("size").unwrap_or_default(),
             tags: result.get::<Vec<String>>("tags").unwrap_or_default(),
             extra: parse_lua_string_map(&result, "extra"),
+        })
+    }
+
+    /// Relay a download-resolution request to a plugin's
+    /// `download(ctx, id)` function. The daemon owns the actual file
+    /// download and filesystem writes.
+    pub async fn call_download(&self, plugin_name: &str, id: &str) -> Result<DiscoverDownload> {
+        let key = self
+            .plugins
+            .get(plugin_name)
+            .ok_or_else(|| Error::SourcePluginNotFound(plugin_name.to_string()))?;
+        let module: LuaTable = self.lua.registry_value(key)?;
+        let download_fn: LuaFunction = module
+            .get("download")
+            .map_err(|_| Error::DiscoverUnsupported(plugin_name.to_string()))?;
+
+        let ctx = self.build_ctx(Some(plugin_name), &[])?;
+        let result: LuaTable = download_fn
+            .call_async((ctx, id.to_string()))
+            .await
+            .map_err(|e| Error::DiscoverFailed {
+                plugin: plugin_name.to_string(),
+                message: e.to_string(),
+            })?;
+
+        Ok(DiscoverDownload {
+            url: result.get("url").unwrap_or_default(),
+            filename: result.get("filename").unwrap_or_default(),
+            title: result.get("title").unwrap_or_default(),
+            preview_url: result.get("preview_url").unwrap_or_default(),
+            description: result.get("description").unwrap_or_default(),
+            tags: result.get::<Vec<String>>("tags").unwrap_or_default(),
+            external_id: result.get("external_id").unwrap_or_else(|_| id.to_string()),
+            size: result.get::<i64>("size").ok(),
+            width: result.get::<u32>("width").ok(),
+            height: result.get::<u32>("height").ok(),
+            content_rating: result.get::<String>("content_rating").ok(),
         })
     }
 
@@ -1109,6 +1252,84 @@ return M
     }
 
     #[test]
+    fn plugin_import_loads_plugin_local_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("helpers")).unwrap();
+        std::fs::write(
+            dir.path().join("helpers/names.lua"),
+            r#"
+local M = {}
+function M.name()
+    return "Imported"
+end
+return M
+"#,
+        )
+        .unwrap();
+        let plugin_path = dir.path().join("main.lua");
+        std::fs::write(
+            &plugin_path,
+            r#"
+local names = import("helpers.names")
+local M = {}
+function M.info()
+    return { name = "imported", types = {"image"}, version = "1.0" }
+end
+function M.scan(ctx)
+    return {
+        { name = names.name(), wp_type = "image", resource = "/tmp/imported.png" },
+    }
+end
+function M.download(ctx, id)
+    return {
+        url = "https://example.invalid/" .. id,
+        filename = id .. ".jpg",
+        title = names.name(),
+        tags = {"tag"},
+        external_id = id,
+        size = 42,
+        width = 10,
+        height = 20,
+        content_rating = "Everyone",
+    }
+end
+return M
+"#,
+        )
+        .unwrap();
+
+        let mut mgr = SourceManager::new().unwrap();
+        let name = mgr.load_plugin(&plugin_path, "test.plugin").unwrap();
+        assert_eq!(name, "imported");
+        block(async { mgr.scan_all(&HashMap::new()).await.unwrap() });
+        assert_eq!(mgr.list()[0].name, "Imported");
+
+        let dl = block_value(async { mgr.call_download("imported", "abc").await.unwrap() });
+        assert_eq!(dl.filename, "abc.jpg");
+        assert_eq!(dl.title, "Imported");
+        assert_eq!(dl.tags, vec!["tag"]);
+        assert_eq!(dl.external_id, "abc");
+        assert_eq!(dl.size, Some(42));
+    }
+
+    #[test]
+    fn plugin_import_rejects_path_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_path = dir.path().join("main.lua");
+        std::fs::write(
+            &plugin_path,
+            r#"
+local bad = import("../outside")
+return bad
+"#,
+        )
+        .unwrap();
+
+        let mut mgr = SourceManager::new().unwrap();
+        assert!(mgr.load_plugin(&plugin_path, "test.plugin").is_err());
+    }
+
+    #[test]
     fn video_source_plugin_discovers_video_files() {
         let lib = tempfile::tempdir().unwrap();
         let nested = lib.path().join("album");
@@ -1119,7 +1340,7 @@ return M
         std::fs::write(nested.join("loop.webm"), b"more video bytes").unwrap();
 
         let plugin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("plugins/video/sources/video.lua");
+            .join("plugins/org.waywallen.video/video.lua");
 
         let mut mgr = SourceManager::new().unwrap();
         let name = mgr.load_plugin(&plugin_path, "test.plugin").unwrap();
@@ -1146,7 +1367,11 @@ return M
         // plugin's `extras(entry)` Lua callback.
 
         let clip_path = lib.path().join("clip.MP4").to_string_lossy().to_string();
-        let clip = mgr.get(&format!("video:{clip_path}")).unwrap().clone();
+        let clip = entries
+            .iter()
+            .find(|entry| entry.resource == clip_path)
+            .unwrap()
+            .clone();
         assert_eq!(clip.name, "clip");
         assert_eq!(clip.resource, clip_path);
 

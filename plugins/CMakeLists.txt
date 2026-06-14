@@ -1,6 +1,7 @@
 option(WAYWALLEN_BUILD_IMAGE_PLUGIN "Build the ffmpeg+Vulkan image plugin" ON)
 option(WAYWALLEN_BUILD_VIDEO_PLUGIN "Build the ffmpeg+Vulkan video plugin" ON)
 option(WAYWALLEN_BUILD_MPV_PLUGIN   "Build the libmpv+EGL/GBM video plugin" OFF)
+option(WAYWALLEN_INSTALL_WALLHAVEN_PLUGIN "Install the Wallhaven source plugin" ON)
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 include(${CMAKE_SOURCE_DIR}/cmake/FetchDeps.cmake)
@@ -28,4 +29,19 @@ endif()
 
 if(WAYWALLEN_BUILD_MPV_PLUGIN)
     add_subdirectory(mpv)
+endif()
+
+if(WAYWALLEN_INSTALL_WALLHAVEN_PLUGIN)
+    set(_WALLHAVEN_PLUGIN_DIR ${CMAKE_INSTALL_DATADIR}/waywallen/plugins/org.waywallen.wallhaven)
+    install(FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/org.waywallen.wallhaven/plugin.toml
+        ${CMAKE_CURRENT_SOURCE_DIR}/org.waywallen.wallhaven/main.lua
+        ${CMAKE_CURRENT_SOURCE_DIR}/org.waywallen.wallhaven/files.txt
+        DESTINATION ${_WALLHAVEN_PLUGIN_DIR}
+    )
+    install(FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/org.waywallen.wallhaven/wallhaven/api.lua
+        ${CMAKE_CURRENT_SOURCE_DIR}/org.waywallen.wallhaven/wallhaven/map.lua
+        DESTINATION ${_WALLHAVEN_PLUGIN_DIR}/wallhaven
+    )
 endif()

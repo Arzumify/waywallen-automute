@@ -630,6 +630,44 @@ pub async fn list_items_by_plugin(
         .with_context(|| format!("select items plugin={plugin_id}"))
 }
 
+pub async fn list_items_by_plugin_external_id(
+    db: &DatabaseConnection,
+    plugin_name: &str,
+    external_id: &str,
+) -> Result<Vec<(item::Model, library::Model)>> {
+    if external_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(plugin) = find_plugin_by_name(db, plugin_name).await? else {
+        return Ok(Vec::new());
+    };
+    let rows = item::Entity::find()
+        .filter(item::Column::PluginId.eq(plugin.id))
+        .filter(item::Column::ExternalId.eq(external_id))
+        .find_also_related(library::Entity)
+        .order_by_asc(item::Column::LibraryId)
+        .order_by_asc(item::Column::Path)
+        .all(db)
+        .await
+        .with_context(|| format!("select items plugin={plugin_name} external_id={external_id}"))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(it, lib)| lib.map(|lib| (it, lib)))
+        .collect())
+}
+
+pub async fn has_item_by_plugin_external_id(
+    db: &DatabaseConnection,
+    plugin_name: &str,
+    external_id: &str,
+) -> Result<bool> {
+    Ok(
+        !list_items_by_plugin_external_id(db, plugin_name, external_id)
+            .await?
+            .is_empty(),
+    )
+}
+
 /// Sweep stale items: delete every item in `library_ids` whose
 /// `sync_at` is older than `before` (the timestamp captured at the
 /// start of the sync round). Items the round re-saw were stamped

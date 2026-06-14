@@ -88,6 +88,12 @@ pub enum GlobalEvent {
         error_code: u32,
         reason: String,
     },
+    RemoteDownloadProgress {
+        source_id: String,
+        id: String,
+        state: i32,
+        error: String,
+    },
     PlaylistChanged,
 }
 

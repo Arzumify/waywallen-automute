@@ -1,0 +1,7 @@
+[plugin]
+id = "org.waywallen.wallhaven"
+name = "Wallhaven"
+version = "0.1.0"
+
+[source]
+lua = "main.lua"

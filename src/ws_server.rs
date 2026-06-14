@@ -4,11 +4,13 @@
 //! `waywallen.control.v1.Request` / `Response` envelopes. All RPCs are
 //! multiplexed via `request_id` and the `payload` oneof.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
@@ -18,15 +20,13 @@ use crate::error::{ok_response, Error};
 use crate::events::GlobalEvent;
 use crate::ipc::proto::ControlMsg;
 use crate::model::repo;
+use crate::plugin::source_manager::DiscoverDownload;
 use crate::queue;
 use crate::renderer_manager;
 use crate::routing::{
     DisplaySnapshot, LayoutSource, LibrarySnapshot, RendererSnapshot, RouterEvent,
 };
-use crate::settings::{
-    FilterLogicState, SettingsStore, WallpaperFilterRuleState, WallpaperFilterState,
-    WallpaperIntFilterState, WallpaperSortRuleState, WallpaperStringFilterState,
-};
+use crate::settings::{SettingsStore, WallpaperFilterState, WallpaperSortRuleState};
 use crate::tasks;
 use crate::wallpaper_properties::{
     dedupe_predefined_schema, is_daemon_display_property_key, WallpaperLayoutOverride,
@@ -721,6 +721,21 @@ fn global_event_to_pb(e: &GlobalEvent, state: &Arc<AppState>) -> Option<pb::Even
                 },
             )),
         }),
+        GlobalEvent::RemoteDownloadProgress {
+            source_id,
+            id,
+            state,
+            error,
+        } => Some(pb::Event {
+            payload: Some(pb::event::Payload::RemoteDownloadProgress(
+                pb::RemoteDownloadProgress {
+                    source_id: source_id.clone(),
+                    id: id.clone(),
+                    state: *state,
+                    error: error.clone(),
+                },
+            )),
+        }),
         GlobalEvent::SettingsChanged => {
             let snap = state.settings.snapshot();
             Some(pb::Event {
@@ -747,6 +762,200 @@ fn global_event_to_pb(e: &GlobalEvent, state: &Arc<AppState>) -> Option<pb::Even
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
+
+fn sanitize_path_segment(input: &str) -> String {
+    let s: String = input
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() {
+        "default".to_string()
+    } else {
+        s
+    }
+}
+
+fn remote_content_dir(source_id: &str) -> PathBuf {
+    let base = crate::settings::default_db_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("remote").join(sanitize_path_segment(source_id))
+}
+
+fn safe_remote_filename(filename: &str, id: &str) -> String {
+    Path::new(filename)
+        .file_name()
+        .and_then(|v| v.to_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(sanitize_path_segment)
+        .unwrap_or_else(|| format!("{}.bin", sanitize_path_segment(id)))
+}
+
+fn sidecar_path(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".json");
+    PathBuf::from(s)
+}
+
+fn publish_remote_download_progress(
+    state: &Arc<AppState>,
+    source_id: &str,
+    id: &str,
+    download_state: pb::RemoteDownloadState,
+    error: impl Into<String>,
+) {
+    state.events.publish(GlobalEvent::RemoteDownloadProgress {
+        source_id: source_id.to_string(),
+        id: id.to_string(),
+        state: download_state as i32,
+        error: error.into(),
+    });
+}
+
+async fn default_remote_source_id(state: &Arc<AppState>) -> Result<String> {
+    let sm = state.source_manager.lock().await;
+    let sources = sm.discover_sources()?;
+    sources
+        .into_iter()
+        .next()
+        .map(|s| s.plugin_id)
+        .ok_or_else(|| anyhow!("no discover source plugin"))
+}
+
+async fn resolve_remote_source_id(state: &Arc<AppState>, source_id: &str) -> Result<String> {
+    if !source_id.trim().is_empty() {
+        return Ok(source_id.to_string());
+    }
+    default_remote_source_id(state).await
+}
+
+async fn source_plugin_version(state: &Arc<AppState>, source_id: &str) -> String {
+    let sm = state.source_manager.lock().await;
+    sm.plugins()
+        .ok()
+        .and_then(|plugins| {
+            plugins
+                .into_iter()
+                .find(|p| p.name == source_id)
+                .map(|p| p.version)
+        })
+        .unwrap_or_else(|| "0.0.0".to_string())
+}
+
+async fn ensure_remote_library(state: &Arc<AppState>, source_id: &str, dir: &Path) -> Result<()> {
+    let version = source_plugin_version(state, source_id).await;
+    let plugin = repo::upsert_plugin(&state.db, source_id, &version).await?;
+    let dir_s = dir.to_string_lossy().to_string();
+    if repo::find_library(&state.db, plugin.id, &dir_s)
+        .await?
+        .is_none()
+    {
+        let lib = repo::add_library(&state.db, plugin.id, &dir_s).await?;
+        state.router.upsert_library(LibrarySnapshot {
+            id: lib.id,
+            path: lib.path,
+            plugin_name: source_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+async fn write_remote_sidecar(path: &Path, info: &DiscoverDownload) -> Result<()> {
+    let sidecar = sidecar_path(path);
+    let tmp = sidecar.with_extension(format!(
+        "{}.tmp-{}",
+        sidecar
+            .extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or("json"),
+        uuid::Uuid::new_v4()
+    ));
+    let data = serde_json::to_vec_pretty(info)?;
+    tokio::fs::write(&tmp, data).await?;
+    tokio::fs::rename(&tmp, &sidecar).await?;
+    Ok(())
+}
+
+async fn download_remote_file(url: &str, path: &Path) -> Result<()> {
+    let tmp = path.with_extension(format!(
+        "{}.part-{}",
+        path.extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or("download"),
+        uuid::Uuid::new_v4()
+    ));
+    let result: Result<()> = async {
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) waywallen")
+            .build()?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("download request {url}"))?
+            .error_for_status()
+            .with_context(|| format!("download response {url}"))?;
+        let mut stream = response.bytes_stream();
+        let mut file = tokio::fs::File::create(&tmp).await?;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("download chunk")?;
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        drop(file);
+        tokio::fs::rename(&tmp, path).await?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    result
+}
+
+async fn run_remote_download(state: Arc<AppState>, source_id: String, id: String) -> Result<()> {
+    publish_remote_download_progress(
+        &state,
+        &source_id,
+        &id,
+        pb::RemoteDownloadState::Pending,
+        "",
+    );
+
+    let info = {
+        let sm = state.source_manager.lock().await;
+        sm.call_download(&source_id, &id).await?
+    };
+    if info.url.trim().is_empty() {
+        return Err(anyhow!("download url is empty"));
+    }
+
+    let dir = remote_content_dir(&source_id);
+    tokio::fs::create_dir_all(&dir).await?;
+    ensure_remote_library(&state, &source_id, &dir).await?;
+
+    let filename = safe_remote_filename(&info.filename, &id);
+    let target = dir.join(filename);
+    publish_remote_download_progress(
+        &state,
+        &source_id,
+        &id,
+        pb::RemoteDownloadState::Downloading,
+        "",
+    );
+    download_remote_file(&info.url, &target).await?;
+    write_remote_sidecar(&target, &info).await?;
+    control::refresh_sources(&state).await?;
+    publish_remote_download_progress(&state, &source_id, &id, pb::RemoteDownloadState::Done, "");
+    Ok(())
+}
 
 async fn dispatch(state: &Arc<AppState>, req: pb::Request) -> pb::Response {
     let rid = req.request_id;
@@ -1426,33 +1635,215 @@ async fn dispatch_inner(
             Res::DisplayRename(pb::DisplayRenameResponse { display })
         }
 
-        Req::RemoteAvailability(_) => Res::RemoteAvailability(pb::RemoteAvailabilityResponse {
-            owned: true,
-            content_dir: String::new(),
-        }),
+        Req::RemoteAvailability(_) => {
+            let sources = {
+                let sm = state.source_manager.lock().await;
+                sm.discover_sources()?
+            };
+            let default_source_id = sources
+                .first()
+                .map(|s| s.plugin_id.clone())
+                .unwrap_or_default();
+            Res::RemoteAvailability(pb::RemoteAvailabilityResponse {
+                sources: sources
+                    .into_iter()
+                    .map(|s| pb::RemoteSourceInfo {
+                        id: s.plugin_id.clone(),
+                        name: s.name,
+                        supports_search: s.supports_search,
+                        sorts: s
+                            .sorts
+                            .into_iter()
+                            .map(|sort| pb::RemoteSortOption {
+                                key: sort.key,
+                                label: sort.label,
+                            })
+                            .collect(),
+                        tags: s.tags,
+                        content_dir: remote_content_dir(&s.plugin_id)
+                            .to_string_lossy()
+                            .to_string(),
+                    })
+                    .collect(),
+                default_source_id,
+            })
+        }
 
-        Req::RemoteSearch(_) => Res::RemoteSearch(pb::RemoteSearchResponse {
-            items: Vec::new(),
-            has_more: false,
-            error: String::new(),
-        }),
+        Req::RemoteSearch(r) => {
+            let source_id = match resolve_remote_source_id(state, &r.source_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(Res::RemoteSearch(pb::RemoteSearchResponse {
+                        items: Vec::new(),
+                        has_more: false,
+                        error: e.to_string(),
+                    }));
+                }
+            };
+            let sort_key = if r.sort_key.trim().is_empty() {
+                let sm = state.source_manager.lock().await;
+                sm.discover_sources()?
+                    .into_iter()
+                    .find(|s| s.plugin_id == source_id)
+                    .and_then(|s| s.sorts.into_iter().next())
+                    .map(|s| s.key)
+                    .unwrap_or_default()
+            } else {
+                r.sort_key.clone()
+            };
+            let result = {
+                let sm = state.source_manager.lock().await;
+                sm.call_discover(&source_id, &r.query, &sort_key, r.page, &r.required_tags)
+                    .await
+            };
+            match result {
+                Ok(result) => {
+                    let mut items = Vec::with_capacity(result.items.len());
+                    for item in result.items {
+                        let installed =
+                            repo::has_item_by_plugin_external_id(&state.db, &source_id, &item.id)
+                                .await?;
+                        items.push(pb::RemoteItem {
+                            id: item.id,
+                            title: item.title,
+                            preview_url: item.preview_url,
+                            author: item.author,
+                            installed,
+                            source_id: source_id.clone(),
+                        });
+                    }
+                    Res::RemoteSearch(pb::RemoteSearchResponse {
+                        items,
+                        has_more: result.has_more,
+                        error: String::new(),
+                    })
+                }
+                Err(e) => Res::RemoteSearch(pb::RemoteSearchResponse {
+                    items: Vec::new(),
+                    has_more: false,
+                    error: e.to_string(),
+                }),
+            }
+        }
 
-        Req::RemoteDownload(_) => Res::RemoteDownload(pb::RemoteDownloadResponse {
-            accepted: false,
-            error: "no remote source plugin".into(),
-        }),
+        Req::RemoteDownload(r) => {
+            let source_id = match resolve_remote_source_id(state, &r.source_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(Res::RemoteDownload(pb::RemoteDownloadResponse {
+                        accepted: false,
+                        error: e.to_string(),
+                    }));
+                }
+            };
+            if r.id.trim().is_empty() {
+                return Ok(Res::RemoteDownload(pb::RemoteDownloadResponse {
+                    accepted: false,
+                    error: "remote id is empty".into(),
+                }));
+            }
+            let task_state = state.clone();
+            let task_source_id = source_id.clone();
+            let task_id = r.id.clone();
+            state.tasks.spawn_async_unique(
+                tasks::TaskKind::Generic,
+                format!("remote/download/{task_source_id}/{task_id}"),
+                format!("remote/download {task_source_id}:{task_id}"),
+                async move {
+                    let result = run_remote_download(
+                        task_state.clone(),
+                        task_source_id.clone(),
+                        task_id.clone(),
+                    )
+                    .await;
+                    if let Err(e) = &result {
+                        publish_remote_download_progress(
+                            &task_state,
+                            &task_source_id,
+                            &task_id,
+                            pb::RemoteDownloadState::Error,
+                            e.to_string(),
+                        );
+                    }
+                    result
+                },
+            );
+            Res::RemoteDownload(pb::RemoteDownloadResponse {
+                accepted: true,
+                error: String::new(),
+            })
+        }
 
-        Req::RemoteUninstall(_) => Res::RemoteUninstall(pb::RemoteUninstallResponse {
-            removed: false,
-            error: "no remote source plugin".into(),
-        }),
+        Req::RemoteUninstall(r) => {
+            let source_id = match resolve_remote_source_id(state, &r.source_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(Res::RemoteUninstall(pb::RemoteUninstallResponse {
+                        removed: false,
+                        error: e.to_string(),
+                    }));
+                }
+            };
+            let rows = repo::list_items_by_plugin_external_id(&state.db, &source_id, &r.id).await?;
+            if rows.is_empty() {
+                Res::RemoteUninstall(pb::RemoteUninstallResponse {
+                    removed: false,
+                    error: "remote item is not installed".into(),
+                })
+            } else {
+                for (item, lib) in rows {
+                    let path = Path::new(&lib.path).join(&item.path);
+                    match tokio::fs::remove_file(&path).await {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(Error::Io(e)),
+                    }
+                    let sidecar = sidecar_path(&path);
+                    match tokio::fs::remove_file(&sidecar).await {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(Error::Io(e)),
+                    }
+                }
+                control::refresh_sources(state).await?;
+                Res::RemoteUninstall(pb::RemoteUninstallResponse {
+                    removed: true,
+                    error: String::new(),
+                })
+            }
+        }
 
-        Req::RemoteDetails(_) => Res::RemoteDetails(pb::RemoteDetailsResponse {
-            description: String::new(),
-            size: String::new(),
-            tags: Vec::new(),
-            error: String::new(),
-        }),
+        Req::RemoteDetails(r) => {
+            let source_id = match resolve_remote_source_id(state, &r.source_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(Res::RemoteDetails(pb::RemoteDetailsResponse {
+                        description: String::new(),
+                        size: String::new(),
+                        tags: Vec::new(),
+                        error: e.to_string(),
+                    }));
+                }
+            };
+            let result = {
+                let sm = state.source_manager.lock().await;
+                sm.call_details(&source_id, &r.id).await
+            };
+            match result {
+                Ok(details) => Res::RemoteDetails(pb::RemoteDetailsResponse {
+                    description: details.description,
+                    size: details.size,
+                    tags: details.tags,
+                    error: String::new(),
+                }),
+                Err(e) => Res::RemoteDetails(pb::RemoteDetailsResponse {
+                    description: String::new(),
+                    size: String::new(),
+                    tags: Vec::new(),
+                    error: e.to_string(),
+                }),
+            }
+        }
 
         Req::WallpaperApply(r) => {
             let entry = match r.wallpaper_id.parse::<i64>() {

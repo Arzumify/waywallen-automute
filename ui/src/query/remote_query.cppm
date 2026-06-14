@@ -1,5 +1,6 @@
 module;
 #include "QExtra/macro_qt.hpp"
+#include <QtCore/QVariant>
 
 #ifdef Q_MOC_RUN
 #    include "waywallen/query/remote_query.moc"
@@ -18,22 +19,22 @@ export class RemoteAvailabilityQuery
     Q_OBJECT
     QML_ELEMENT
 
-    Q_PROPERTY(bool owned READ owned NOTIFY ownedChanged FINAL)
-    Q_PROPERTY(QString contentDir READ contentDir NOTIFY ownedChanged FINAL)
+    Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged FINAL)
+    Q_PROPERTY(QString defaultSourceId READ defaultSourceId NOTIFY sourcesChanged FINAL)
 
 public:
     RemoteAvailabilityQuery(QObject* parent = nullptr);
 
-    auto owned() const -> bool;
-    auto contentDir() const -> const QString&;
+    auto sources() const -> const QVariantList&;
+    auto defaultSourceId() const -> const QString&;
 
     void reload() override;
 
-    Q_SIGNAL void ownedChanged();
+    Q_SIGNAL void sourcesChanged();
 
 private:
-    bool    m_owned { false };
-    QString m_content_dir;
+    QVariantList m_sources;
+    QString      m_default_source_id;
 };
 
 export class RemoteSearchQuery : public Query,
@@ -41,8 +42,9 @@ export class RemoteSearchQuery : public Query,
     Q_OBJECT
     QML_ELEMENT
 
+    Q_PROPERTY(QString sourceId READ sourceId WRITE setSourceId NOTIFY sourceIdChanged FINAL)
     Q_PROPERTY(QString query READ query WRITE setQuery NOTIFY queryChanged FINAL)
-    Q_PROPERTY(int sort READ sort WRITE setSort NOTIFY sortChanged FINAL)
+    Q_PROPERTY(QString sortKey READ sortKey WRITE setSortKey NOTIFY sortKeyChanged FINAL)
     Q_PROPERTY(QStringList tags READ tags WRITE setTags NOTIFY tagsChanged FINAL)
     Q_PROPERTY(waywallen::model::RemoteListModel* model READ model CONSTANT FINAL)
     Q_PROPERTY(bool hasMore READ hasMore NOTIFY stateChanged FINAL)
@@ -51,11 +53,14 @@ export class RemoteSearchQuery : public Query,
 public:
     RemoteSearchQuery(QObject* parent = nullptr);
 
+    auto sourceId() const -> const QString&;
+    void setSourceId(const QString&);
+
     auto query() const -> const QString&;
     void setQuery(const QString&);
 
-    auto sort() const -> int;
-    void setSort(int);
+    auto sortKey() const -> const QString&;
+    void setSortKey(const QString&);
 
     auto tags() const -> const QStringList&;
     void setTags(const QStringList&);
@@ -67,16 +72,18 @@ public:
     void             reload() override;
     Q_INVOKABLE void loadMore();
 
+    Q_SIGNAL void sourceIdChanged();
     Q_SIGNAL void queryChanged();
-    Q_SIGNAL void sortChanged();
+    Q_SIGNAL void sortKeyChanged();
     Q_SIGNAL void tagsChanged();
     Q_SIGNAL void stateChanged();
 
 private:
     void fetchPage(quint32 page, bool append);
 
+    QString                 m_source_id;
     QString                 m_query;
-    int                     m_sort { 0 };
+    QString                 m_sort_key;
     QStringList             m_tags;
     model::RemoteListModel* m_model;
     bool                    m_has_more { false };
@@ -89,6 +96,7 @@ export class RemoteDetailsQuery : public Query,
     Q_OBJECT
     QML_ELEMENT
 
+    Q_PROPERTY(QString sourceId READ sourceId WRITE setSourceId NOTIFY sourceIdChanged FINAL)
     Q_PROPERTY(QString itemId READ itemId WRITE setItemId NOTIFY itemIdChanged FINAL)
     Q_PROPERTY(QString description READ description NOTIFY loaded FINAL)
     Q_PROPERTY(QString size READ size NOTIFY loaded FINAL)
@@ -96,6 +104,9 @@ export class RemoteDetailsQuery : public Query,
 
 public:
     RemoteDetailsQuery(QObject* parent = nullptr);
+
+    auto sourceId() const -> const QString&;
+    void setSourceId(const QString&);
 
     auto itemId() const -> const QString&;
     void setItemId(const QString&);
@@ -105,10 +116,12 @@ public:
 
     void reload() override;
 
+    Q_SIGNAL void sourceIdChanged();
     Q_SIGNAL void itemIdChanged();
     Q_SIGNAL void loaded();
 
 private:
+    QString     m_source_id;
     QString     m_item_id;
     QString     m_description;
     QString     m_size;
@@ -124,13 +137,14 @@ public:
     RemoteDownloadQuery(QObject* parent = nullptr);
 
     void             reload() override;
-    Q_INVOKABLE void start(const QString& id);
-    Q_INVOKABLE void uninstall(const QString& id);
+    Q_INVOKABLE void start(const QString& sourceId, const QString& id);
+    Q_INVOKABLE void uninstall(const QString& sourceId, const QString& id);
 
-    Q_SIGNAL void accepted(const QString& id);
-    Q_SIGNAL void rejected(const QString& id, const QString& error);
-    Q_SIGNAL void uninstalled(const QString& id);
-    Q_SIGNAL void uninstallFailed(const QString& id, const QString& error);
+    Q_SIGNAL void accepted(const QString& sourceId, const QString& id);
+    Q_SIGNAL void rejected(const QString& sourceId, const QString& id, const QString& error);
+    Q_SIGNAL void uninstalled(const QString& sourceId, const QString& id);
+    Q_SIGNAL void uninstallFailed(const QString& sourceId, const QString& id,
+                                  const QString& error);
 };
 
 } // namespace waywallen

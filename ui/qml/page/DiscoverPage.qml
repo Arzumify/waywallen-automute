@@ -13,21 +13,54 @@ MD.Page {
     property var detailRow: null
     property int detailState: 0
 
-    readonly property var sortOptions: [
-        { name: qsTr("Trending"), value: 1 },
-        { name: qsTr("Recent"), value: 2 },
-        { name: qsTr("Popular"), value: 3 }
-    ]
+    property string sourceId: ""
+    property var sortOptions: []
     property int sortIndex: 0
 
+    function sourceInfo(id) {
+        for (const s of availabilityQuery.sources) {
+            if (s.id === id)
+                return s;
+        }
+        return null;
+    }
+
+    function sourceName(id) {
+        const s = sourceInfo(id);
+        return s ? s.name : "";
+    }
+
+    function sortLabel() {
+        if (sortOptions.length === 0)
+            return qsTr("Sort");
+        return sortOptions[Math.max(0, Math.min(sortIndex, sortOptions.length - 1))].label;
+    }
+
+    function setSource(id) {
+        const s = sourceInfo(id);
+        if (!s)
+            return;
+        sourceId = id;
+        sortOptions = s.sorts ?? [];
+        sortIndex = 0;
+        searchQuery.sourceId = id;
+        detailsQuery.sourceId = id;
+        searchQuery.sortKey = sortOptions.length > 0 ? sortOptions[0].key : "";
+        detailRow = null;
+        detailState = 0;
+    }
+
     function pickSort(idx) {
+        if (idx < 0 || idx >= sortOptions.length)
+            return;
         sortIndex = idx;
-        searchQuery.sort = sortOptions[idx].value;
+        searchQuery.sortKey = sortOptions[idx].key;
     }
 
     function selectItem(index) {
         detailRow = searchQuery.model.get(index);
         detailState = detailRow.installed ? 3 : 0;
+        detailsQuery.sourceId = detailRow.sourceId;
         detailsQuery.itemId = detailRow.itemId;
     }
 
@@ -42,9 +75,20 @@ MD.Page {
         return num.toFixed(unit === "B" ? 0 : 1) + " " + unit;
     }
 
+    W.RemoteAvailabilityQuery {
+        id: availabilityQuery
+        onSourcesChanged: {
+            if (sources.length === 0)
+                return;
+            if (root.sourceId.length === 0)
+                root.setSource(defaultSourceId.length > 0 ? defaultSourceId : sources[0].id);
+            else
+                root.setSource(root.sourceId);
+        }
+    }
+
     W.RemoteSearchQuery {
         id: searchQuery
-        sort: 1
         onStateChanged: {
             if (errorText.length > 0)
                 W.Action.toast(qsTr("Remote search failed: ") + errorText);
@@ -66,19 +110,19 @@ MD.Page {
 
     W.RemoteDownloadQuery {
         id: dlQuery
-        function onUninstalled(id) {
-            searchQuery.model.setInstalled(id, false);
-            if (root.detailRow && root.detailRow.itemId === id) {
+        function onUninstalled(sourceId, id) {
+            searchQuery.model.setInstalled(sourceId, id, false);
+            if (root.detailRow && root.detailRow.sourceId === sourceId && root.detailRow.itemId === id) {
                 root.detailRow.installed = false;
                 root.detailState = 0;
             }
             W.Action.toast(qsTr("Uninstalled"));
         }
-        function onUninstallFailed(id, error) {
+        function onUninstallFailed(sourceId, id, error) {
             W.Action.toast(qsTr("Uninstall failed: ") + error);
         }
-        function onRejected(id, error) {
-            if (root.detailRow && root.detailRow.itemId === id)
+        function onRejected(sourceId, id, error) {
+            if (root.detailRow && root.detailRow.sourceId === sourceId && root.detailRow.itemId === id)
                 root.detailState = 0;
             W.Action.toast(qsTr("Download rejected: ") + error);
         }
@@ -86,10 +130,10 @@ MD.Page {
 
     Connections {
         target: W.Notify
-        function onRemoteDownloadProgress(id, state, error) {
+        function onRemoteDownloadProgress(sourceId, id, state, error) {
             if (state === 3)
-                searchQuery.model.setInstalled(id, true);
-            if (root.detailRow && root.detailRow.itemId === id) {
+                searchQuery.model.setInstalled(sourceId, id, true);
+            if (root.detailRow && root.detailRow.sourceId === sourceId && root.detailRow.itemId === id) {
                 root.detailState = state;
                 if (state === 3)
                     root.detailRow.installed = true;
@@ -101,7 +145,9 @@ MD.Page {
 
     function reloadAll() {
         searchQuery.tags = m_filter_dialog.collect();
-        searchQuery.reload();
+        availabilityQuery.reload();
+        if (root.sourceId.length > 0)
+            searchQuery.reload();
     }
 
     Connections {
@@ -137,8 +183,34 @@ MD.Page {
                     spacing: 8
 
                     MD.EmbedChip {
+                        id: sourceChip
+                        visible: availabilityQuery.sources.length > 1
+                        text: root.sourceName(root.sourceId)
+                        trailingIconName: MD.Token.icon.arrow_drop_down
+                        mdState.borderWidth: 1
+                        onClicked: sourceMenu.open()
+
+                        MD.Menu {
+                            id: sourceMenu
+                            parent: sourceChip
+                            y: parent.height
+                            model: availabilityQuery.sources
+                            contentDelegate: MD.MenuItem {
+                                required property var modelData
+                                text: modelData.name
+                                icon.name: modelData.id === root.sourceId ? MD.Token.icon.check : ' '
+                                onClicked: {
+                                    root.setSource(modelData.id);
+                                    sourceMenu.close();
+                                }
+                            }
+                        }
+                    }
+
+                    MD.EmbedChip {
                         id: sortChip
-                        text: root.sortOptions[root.sortIndex].name
+                        visible: root.sortOptions.length > 0
+                        text: root.sortLabel()
                         trailingIconName: MD.Token.icon.arrow_drop_down
                         mdState.borderWidth: 1
                         onClicked: sortMenu.open()
@@ -151,7 +223,7 @@ MD.Page {
                             contentDelegate: MD.MenuItem {
                                 required property var modelData
                                 required property int index
-                                text: modelData.name
+                                text: modelData.label
                                 icon.name: index === root.sortIndex ? MD.Token.icon.check : ' '
                                 onClicked: {
                                     root.pickSort(index);
@@ -421,10 +493,10 @@ MD.Page {
                     onClicked: {
                         if (!root.detailRow) return;
                         if (root.detailState === 3) {
-                            dlQuery.uninstall(root.detailRow.itemId);
+                            dlQuery.uninstall(root.detailRow.sourceId, root.detailRow.itemId);
                         } else {
                             root.detailState = 1;
-                            dlQuery.start(root.detailRow.itemId);
+                            dlQuery.start(root.detailRow.sourceId, root.detailRow.itemId);
                         }
                     }
                 }

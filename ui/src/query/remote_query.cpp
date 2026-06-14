@@ -2,6 +2,7 @@ module;
 #include "waywallen/query/remote_query.moc.h"
 #undef assert
 #include <rstd/macro.hpp>
+#include <QtCore/QVariant>
 
 module waywallen;
 import :query.remote;
@@ -17,8 +18,10 @@ namespace waywallen
 
 RemoteAvailabilityQuery::RemoteAvailabilityQuery(QObject* parent): Query(parent) {}
 
-auto RemoteAvailabilityQuery::owned() const -> bool { return m_owned; }
-auto RemoteAvailabilityQuery::contentDir() const -> const QString& { return m_content_dir; }
+auto RemoteAvailabilityQuery::sources() const -> const QVariantList& { return m_sources; }
+auto RemoteAvailabilityQuery::defaultSourceId() const -> const QString& {
+    return m_default_source_id;
+}
 
 void RemoteAvailabilityQuery::reload() {
     setStatus(Status::Querying);
@@ -34,10 +37,32 @@ void RemoteAvailabilityQuery::reload() {
         if (! self) co_return;
 
         self->inspect_set(result, [self](const proto::Response& rsp) {
-            const auto& av      = rsp.remoteAvailability();
-            self->m_owned       = av.owned();
-            self->m_content_dir = av.contentDir();
-            Q_EMIT self->ownedChanged();
+            const auto& av = rsp.remoteAvailability();
+            QVariantList sources;
+            sources.reserve(av.sources().size());
+            for (const auto& src : av.sources()) {
+                QVariantList sorts;
+                sorts.reserve(src.sorts().size());
+                for (const auto& sort : src.sorts()) {
+                    QVariantMap sm;
+                    sm[u"key"_s]   = sort.key();
+                    sm[u"label"_s] = sort.label();
+                    sorts.push_back(sm);
+                }
+                QStringList tags;
+                for (const auto& tag : src.tags()) tags.push_back(tag);
+                QVariantMap m;
+                m[u"id"_s]             = src.id_proto();
+                m[u"name"_s]           = src.name();
+                m[u"supportsSearch"_s] = src.supportsSearch();
+                m[u"sorts"_s]          = sorts;
+                m[u"tags"_s]           = tags;
+                m[u"contentDir"_s]     = src.contentDir();
+                sources.push_back(m);
+            }
+            self->m_sources           = std::move(sources);
+            self->m_default_source_id = av.defaultSourceId();
+            Q_EMIT self->sourcesChanged();
         });
         co_return;
     });
@@ -45,9 +70,18 @@ void RemoteAvailabilityQuery::reload() {
 
 RemoteSearchQuery::RemoteSearchQuery(QObject* parent)
     : Query(parent), m_model(new model::RemoteListModel(this)) {
+    connect_requet_reload(&RemoteSearchQuery::sourceIdChanged, this);
     connect_requet_reload(&RemoteSearchQuery::queryChanged, this);
-    connect_requet_reload(&RemoteSearchQuery::sortChanged, this);
+    connect_requet_reload(&RemoteSearchQuery::sortKeyChanged, this);
     connect_requet_reload(&RemoteSearchQuery::tagsChanged, this);
+}
+
+auto RemoteSearchQuery::sourceId() const -> const QString& { return m_source_id; }
+void RemoteSearchQuery::setSourceId(const QString& v) {
+    if (m_source_id != v) {
+        m_source_id = v;
+        Q_EMIT sourceIdChanged();
+    }
 }
 
 auto RemoteSearchQuery::query() const -> const QString& { return m_query; }
@@ -58,11 +92,11 @@ void RemoteSearchQuery::setQuery(const QString& v) {
     }
 }
 
-auto RemoteSearchQuery::sort() const -> int { return m_sort; }
-void RemoteSearchQuery::setSort(int v) {
-    if (m_sort != v) {
-        m_sort = v;
-        Q_EMIT sortChanged();
+auto RemoteSearchQuery::sortKey() const -> const QString& { return m_sort_key; }
+void RemoteSearchQuery::setSortKey(const QString& v) {
+    if (m_sort_key != v) {
+        m_sort_key = v;
+        Q_EMIT sortKeyChanged();
     }
 }
 
@@ -94,8 +128,9 @@ void RemoteSearchQuery::fetchPage(quint32 page, bool append) {
 
     auto req   = proto::Request {};
     auto inner = proto::RemoteSearchRequest {};
+    inner.setSourceId(m_source_id);
     inner.setQuery(m_query);
-    inner.setSort(static_cast<proto::RemoteSort>(m_sort));
+    inner.setSortKey(m_sort_key);
     inner.setPage(page);
     inner.setRequiredTags(m_tags);
     req.setRemoteSearch(std::move(inner));
@@ -112,6 +147,7 @@ void RemoteSearchQuery::fetchPage(quint32 page, bool append) {
             rows.reserve(sr.items().size());
             for (const auto& it : sr.items()) {
                 rows.push_back(model::RemoteRow {
+                    it.sourceId(),
                     it.id_proto(),
                     it.title(),
                     it.previewUrl(),
@@ -133,7 +169,16 @@ void RemoteSearchQuery::fetchPage(quint32 page, bool append) {
 }
 
 RemoteDetailsQuery::RemoteDetailsQuery(QObject* parent): Query(parent) {
+    connect_requet_reload(&RemoteDetailsQuery::sourceIdChanged, this);
     connect_requet_reload(&RemoteDetailsQuery::itemIdChanged, this);
+}
+
+auto RemoteDetailsQuery::sourceId() const -> const QString& { return m_source_id; }
+void RemoteDetailsQuery::setSourceId(const QString& v) {
+    if (m_source_id != v) {
+        m_source_id = v;
+        Q_EMIT sourceIdChanged();
+    }
 }
 
 auto RemoteDetailsQuery::itemId() const -> const QString& { return m_item_id; }
@@ -158,6 +203,7 @@ void RemoteDetailsQuery::reload() {
 
     auto req   = proto::Request {};
     auto inner = proto::RemoteDetailsRequest {};
+    inner.setSourceId(m_source_id);
     inner.setId_proto(m_item_id);
     req.setRemoteDetails(std::move(inner));
 
@@ -183,56 +229,58 @@ RemoteDownloadQuery::RemoteDownloadQuery(QObject* parent): Query(parent) {}
 
 void RemoteDownloadQuery::reload() {}
 
-void RemoteDownloadQuery::start(const QString& id) {
-    if (id.isEmpty()) return;
+void RemoteDownloadQuery::start(const QString& sourceId, const QString& id) {
+    if (sourceId.isEmpty() || id.isEmpty()) return;
     setStatus(Status::Querying);
     auto backend = App::instance()->backend();
 
     auto req   = proto::Request {};
     auto inner = proto::RemoteDownloadRequest {};
+    inner.setSourceId(sourceId);
     inner.setId_proto(id);
     req.setRemoteDownload(std::move(inner));
 
     auto self = QWatcher { this };
-    spawn([self, backend, req = std::move(req), id]() mutable -> task<void> {
+    spawn([self, backend, req = std::move(req), sourceId, id]() mutable -> task<void> {
         auto result = co_await backend->send(std::move(req));
         co_await asio::post(asio::bind_executor(self->get_executor(), use_task));
         if (! self) co_return;
 
-        self->inspect_set(result, [self, id](const proto::Response& rsp) {
+        self->inspect_set(result, [self, sourceId, id](const proto::Response& rsp) {
             const auto& dr = rsp.remoteDownload();
             if (dr.accepted()) {
-                Q_EMIT self->accepted(id);
+                Q_EMIT self->accepted(sourceId, id);
             } else {
-                Q_EMIT self->rejected(id, dr.error());
+                Q_EMIT self->rejected(sourceId, id, dr.error());
             }
         });
         co_return;
     });
 }
 
-void RemoteDownloadQuery::uninstall(const QString& id) {
-    if (id.isEmpty()) return;
+void RemoteDownloadQuery::uninstall(const QString& sourceId, const QString& id) {
+    if (sourceId.isEmpty() || id.isEmpty()) return;
     setStatus(Status::Querying);
     auto backend = App::instance()->backend();
 
     auto req   = proto::Request {};
     auto inner = proto::RemoteUninstallRequest {};
+    inner.setSourceId(sourceId);
     inner.setId_proto(id);
     req.setRemoteUninstall(std::move(inner));
 
     auto self = QWatcher { this };
-    spawn([self, backend, req = std::move(req), id]() mutable -> task<void> {
+    spawn([self, backend, req = std::move(req), sourceId, id]() mutable -> task<void> {
         auto result = co_await backend->send(std::move(req));
         co_await asio::post(asio::bind_executor(self->get_executor(), use_task));
         if (! self) co_return;
 
-        self->inspect_set(result, [self, id](const proto::Response& rsp) {
+        self->inspect_set(result, [self, sourceId, id](const proto::Response& rsp) {
             const auto& ur = rsp.remoteUninstall();
             if (ur.removed()) {
-                Q_EMIT self->uninstalled(id);
+                Q_EMIT self->uninstalled(sourceId, id);
             } else {
-                Q_EMIT self->uninstallFailed(id, ur.error());
+                Q_EMIT self->uninstallFailed(sourceId, id, ur.error());
             }
         });
         co_return;
