@@ -105,6 +105,7 @@ CFG_ARGS=(
     # don't list them here to avoid flag-name churn between FFmpeg releases.
     --enable-vulkan
     --enable-vaapi
+    --enable-zlib
     --disable-vdpau
     --disable-xlib --disable-libxcb
     # libdav1d for sw AV1 decode (FFmpeg's built-in av1 decoder is

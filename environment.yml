@@ -39,6 +39,7 @@ dependencies:
   # FFmpeg
   - nasm
   - make
+  - zlib
 
   # Build infrastructure
   - cmake>=3.28
