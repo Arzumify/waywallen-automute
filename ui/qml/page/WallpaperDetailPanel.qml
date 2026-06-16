@@ -90,7 +90,7 @@ Item {
     function openContainerFolder() {
         const url = root.containerFolderUrl(root.wp?.resource);
         if (url.length > 0)
-            MD.Util.openUrlExternally(url);
+            MD.Util.openFolderExternally(url);
     }
 
     readonly property var rendererCandidates: {
@@ -245,7 +245,7 @@ Item {
 
     MD.Action {
         id: openContainerFolderAction
-        text: "Open container folder"
+        text: "Open containing folder"
         icon.name: MD.Token.icon.folder_open
         enabled: root.containerFolderUrl(root.wp?.resource).length > 0
         onTriggered: root.openContainerFolder()
