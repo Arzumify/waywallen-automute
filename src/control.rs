@@ -5,7 +5,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 
 use crate::error::{Error, Result};
-use crate::ipc::proto::ControlMsg;
 use crate::model::{repo, sync};
 use crate::queue::rotator::RotationConfig;
 use crate::queue::Mode;
@@ -557,20 +556,12 @@ pub async fn run_rotator(
 }
 
 pub async fn pause_all(app: &Arc<AppState>) -> Result<()> {
-    send_all(app, ControlMsg::Pause).await
+    app.router.set_manual_pause(true).await;
+    Ok(())
 }
 
 pub async fn resume_all(app: &Arc<AppState>) -> Result<()> {
-    send_all(app, ControlMsg::Play).await
-}
-
-async fn send_all(app: &Arc<AppState>, msg: ControlMsg) -> Result<()> {
-    let ids = app.renderer_manager.list().await;
-    for id in ids {
-        if let Err(e) = app.renderer_manager.send_control(&id, msg.clone()).await {
-            log::warn!("control {id}: {e}");
-        }
-    }
+    app.router.set_manual_pause(false).await;
     Ok(())
 }
 

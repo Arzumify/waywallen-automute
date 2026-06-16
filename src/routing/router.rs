@@ -206,6 +206,9 @@ struct Inner {
     /// Set when the current login session is inactive (user switched to
     /// another session). Causes all renderers to pause.
     session_inactive: bool,
+    /// User-requested global pause state. This shares the same
+    /// daemon-owned lifecycle path as autopause.
+    manual_paused: bool,
     /// Generation counter for the session-pause debounce timer. Bumped
     /// on every session-state transition to invalidate stale timers.
     session_gen: u64,
@@ -257,6 +260,7 @@ impl Router {
                 next_config_generation: 0,
                 session_locked: false,
                 session_inactive: false,
+                manual_paused: false,
                 session_gen: 0,
             }),
             mgr,
@@ -579,15 +583,12 @@ impl Router {
                 }
             })
         };
-        let snap_id = id.clone();
         {
             let mut inner = self.inner.lock().await;
             inner.table.add_renderer(handle);
             inner.renderer_tasks.insert(id, task);
         }
-        if let Some(snap) = self.snapshot_renderer(&snap_id).await {
-            self.emit(RouterEvent::RendererUpsert(snap));
-        }
+        self.reconcile_lifecycle().await;
     }
 
     pub async fn unregister_renderer(self: &Arc<Self>, id: &str) {
@@ -1095,6 +1096,21 @@ impl Router {
                     }
                 });
             }
+        }
+    }
+
+    pub async fn set_manual_pause(self: &Arc<Self>, paused: bool) {
+        let changed = {
+            let mut inner = self.inner.lock().await;
+            if inner.manual_paused == paused {
+                false
+            } else {
+                inner.manual_paused = paused;
+                true
+            }
+        };
+        if changed {
+            self.reconcile_lifecycle().await;
         }
     }
 
@@ -1737,19 +1753,25 @@ impl Router {
                     (ap.pause_on_lock && inner.session_locked)
                         || (ap.pause_on_user_switch && inner.session_inactive)
                 };
-                let should_pause = !has_active_link || any_autopaused || session_paused;
+                let manual_paused = inner.manual_paused;
+                let should_pause =
+                    manual_paused || !has_active_link || any_autopaused || session_paused;
                 let was_paused = inner.paused_renderers.contains(&rid);
                 if !should_pause && was_paused {
                     inner.paused_renderers.remove(&rid);
                     let cause = if has_active_link {
-                        "autopause-clear"
+                        "pause-clear"
                     } else {
                         "ref-count"
                     };
                     out.push((rid, ControlMsg::Play, cause));
                 } else if should_pause && !was_paused {
                     inner.paused_renderers.insert(rid.clone());
-                    let cause = if has_active_link {
+                    let cause = if manual_paused {
+                        "manual"
+                    } else if session_paused {
+                        "session"
+                    } else if has_active_link {
                         "autopause"
                     } else {
                         "ref-count"
@@ -2487,7 +2509,7 @@ mod tests {
             RouterEvent::RendererUpsert(snap) => {
                 assert_eq!(snap.id, "R1");
                 assert_eq!(snap.wp_type, "scene");
-                assert_eq!(snap.status, RendererStatus::Playing);
+                assert_eq!(snap.status, RendererStatus::Paused);
                 assert_eq!(snap.name, "test-stub");
             }
             other => panic!("expected RendererUpsert, got {other:?}"),
@@ -2886,6 +2908,67 @@ mod tests {
             .update_display_window_state(h.id, ap::FLAG_NON_MINIMIZED | ap::FLAG_FULLSCREEN)
             .await;
         assert!(router.is_paused("r1").await);
+    }
+
+    #[tokio::test]
+    async fn renderer_without_links_is_paused_on_register() {
+        let mgr = Arc::new(RendererManager::new_default());
+        let router = Router::new(mgr.clone());
+        let r = RendererHandle::test_stub("r1", "scene");
+        mgr.register_test_handle(r.clone()).await;
+
+        router.register_renderer(r.clone()).await;
+
+        assert!(router.is_paused("r1").await);
+    }
+
+    #[tokio::test]
+    async fn manual_pause_is_daemon_state() {
+        let mgr = Arc::new(RendererManager::new_default());
+        let router = Router::new(mgr.clone());
+        let r = RendererHandle::test_stub("r1", "scene");
+        mgr.register_test_handle(r.clone()).await;
+        router.register_renderer(r.clone()).await;
+        let _h = router.register_display(reg("HDMI-A-1", 1920, 1080)).await;
+
+        assert!(!router.is_paused("r1").await);
+        router.set_manual_pause(true).await;
+        assert!(router.is_paused("r1").await);
+        router.set_manual_pause(false).await;
+        assert!(!router.is_paused("r1").await);
+    }
+
+    #[tokio::test]
+    async fn autopause_state_applies_after_relink_to_playing_renderer() {
+        let mgr = Arc::new(RendererManager::new_default());
+        let router = Router::new(mgr.clone());
+        router.attach_settings(
+            settings_with_autopause("HDMI-A-1", AutopauseMode::FullScreen, 100).await,
+        );
+
+        let r1 = RendererHandle::test_stub("r1", "scene");
+        *r1.bind_snapshot().lock().unwrap() = Some(fake_bind_snapshot(1, 1920, 1080));
+        mgr.register_test_handle(r1.clone()).await;
+        router.register_renderer(r1.clone()).await;
+        let r2 = RendererHandle::test_stub("r2", "scene");
+        *r2.bind_snapshot().lock().unwrap() = Some(fake_bind_snapshot(1, 1920, 1080));
+        mgr.register_test_handle(r2.clone()).await;
+        router.register_renderer(r2.clone()).await;
+
+        let a = router.register_display(reg("HDMI-A-1", 1920, 1080)).await;
+        let b = router.register_display(reg("DP-1", 1920, 1080)).await;
+        router.relink_displays_to(&[b.id], "r2").await;
+        assert!(!router.is_paused("r2").await);
+
+        router
+            .update_display_window_state(a.id, ap::FLAG_NON_MINIMIZED | ap::FLAG_FULLSCREEN)
+            .await;
+        assert!(router.is_paused("r1").await);
+        assert!(!router.is_paused("r2").await);
+
+        router.relink_displays_to(&[a.id], "r2").await;
+
+        assert!(router.is_paused("r2").await);
     }
 
     #[tokio::test(start_paused = true)]

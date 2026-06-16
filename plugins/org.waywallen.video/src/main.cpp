@@ -807,6 +807,7 @@ int main(int argc, char** argv) {
     wavsen::video::DrmFrameView drmv {};
     double                      prev_pts = -1.0; // for loop-boundary detection (PTS regression)
     uint32_t stall_warn_counter          = 0;    // throttle ETIME log spam during backpressure
+    bool     submitted_since_negotiate   = false;
 
     while (! host.shutdown.load(std::memory_order_acquire)) {
         {
@@ -826,6 +827,8 @@ int main(int argc, char** argv) {
                         signal_shutdown(host);
                         break;
                     }
+                } else {
+                    submitted_since_negotiate = false;
                 }
                 slot = 0;
             }
@@ -894,7 +897,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (host.paused.load(std::memory_order_acquire)) {
+        if (host.paused.load(std::memory_order_acquire) && submitted_since_negotiate) {
             std::unique_lock<std::mutex> lk(host.neg_mu);
             host.neg_cv.wait(lk, [&] {
                 return host.shutdown.load(std::memory_order_acquire) || host.neg_pending ||
@@ -1050,6 +1053,7 @@ int main(int argc, char** argv) {
             signal_shutdown(host);
             break;
         }
+        submitted_since_negotiate = true;
 
         slot = (slot + 1) % SLOT_COUNT;
     }
