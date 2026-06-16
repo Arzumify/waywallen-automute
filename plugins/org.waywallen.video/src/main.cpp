@@ -329,6 +329,15 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
     }
 }
 
+void sync_audio_pause(wavsen::audio::AvPlayer* av_player, bool paused) {
+    if (! av_player) return;
+    if (paused) {
+        if (! av_player->is_paused()) av_player->pause();
+    } else if (av_player->is_paused()) {
+        av_player->play();
+    }
+}
+
 // --selftest: open a video, decode one frame, run YuvToRgba against a
 // throw-away VkImage we allocate ourselves. Validates that the GPU
 // pipeline (device, shader compile/load, descriptor set, queue submit)
@@ -689,7 +698,6 @@ int main(int argc, char** argv) {
             } else {
                 av_player = std::move(p_res).unwrap();
                 av_player->set_volume(volume_pct / 100.0f);
-                av_player->play();
                 rstd_info("waywallen-video-renderer: audio attached "
                           "(volume={}%)",
                           volume_pct);
@@ -850,6 +858,9 @@ int main(int argc, char** argv) {
             av_player->set_muted(! en);
         }
 
+        const bool paused_now = host.paused.load(std::memory_order_acquire);
+        sync_audio_pause(av_player.get(), paused_now);
+
         /* hwdec change requested — apply at this loop boundary by
          * tearing down + reopening the decoder. The reopen runs the
          * full hwaccel trial again with the new mode. */
@@ -897,7 +908,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (host.paused.load(std::memory_order_acquire) && submitted_since_negotiate) {
+        if (paused_now && submitted_since_negotiate) {
             std::unique_lock<std::mutex> lk(host.neg_mu);
             host.neg_cv.wait(lk, [&] {
                 return host.shutdown.load(std::memory_order_acquire) || host.neg_pending ||
