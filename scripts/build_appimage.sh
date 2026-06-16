@@ -19,7 +19,7 @@ set -euo pipefail
 # Script lives in <repo>/scripts/, so PROJECT_DIR is one level up.
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_NAME="${WAYWALLEN_CONDA_ENV:-waywallen}"
-OWE_PLUGIN_VER="0.1.6"
+OWE_PLUGIN_VER="0.1.7"
 OWE_PLUGIN_ZIP="https://github.com/waywallen/open-wallpaper-engine/releases/download/v${OWE_PLUGIN_VER}/org.waywallen.open-wallpaper-engine-${OWE_PLUGIN_VER}-linux-x86_64.zip"
 OWE_PLUGIN_ID="org.waywallen.open-wallpaper-engine"
 APPDIR="$PROJECT_DIR/build/AppDir"

@@ -1,3 +1,11 @@
+<release version="0.2.1" date="2026-06-16">
+  <description>
+    <p>Fix auto pause after switching wallpapers.</p>
+    <p>Fix resetting user properties.</p>
+    <p>Fix opening wallpaper container folder.</p>
+    <p>Fix video pause audio.</p>
+  </description>
+</release>
 <release version="0.2.0" date="2026-06-14">
   <description>
     <p>Support playlists.</p>
