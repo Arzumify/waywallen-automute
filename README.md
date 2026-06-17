@@ -18,7 +18,7 @@ It started life as a Wallpaper Engine plugin for KDE.
 ## Screenshots
 
 <p align="center">
-  <img src="ui/assets/main_page.png" alt="Waywallen main page" width="720" />
+  <img src="ui/assets/main_page.webp" alt="Waywallen main page" width="720" />
 </p>
 
 ## Quick Start

@@ -18,7 +18,7 @@ Waywallen 是一个为 Linux 桌面打造的动态壁纸方案
 ## 界面
 
 <p align="center">
-  <img src="ui/assets/main_page.png" alt="Waywallen 主界面" width="720" />
+  <img src="ui/assets/main_page.webp" alt="Waywallen 主界面" width="720" />
 </p>
 
 ## 快速开始
