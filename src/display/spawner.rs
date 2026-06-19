@@ -458,38 +458,16 @@ mod tests {
     }
 
     #[test]
-    fn hyprland_picks_layer_shell() {
-        let caps = DeCaps {
-            xdg_desktop: vec!["hyprland".into()],
-            ..Default::default()
-        };
-        match pick_backend(&registry(), &caps) {
-            PickOutcome::Matched(d) => assert_eq!(d.name, "layer-shell"),
-            other => panic!("expected Matched(layer-shell), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn sway_picks_layer_shell() {
-        let caps = DeCaps {
-            xdg_desktop: vec!["sway".into()],
-            ..Default::default()
-        };
-        match pick_backend(&registry(), &caps) {
-            PickOutcome::Matched(d) => assert_eq!(d.name, "layer-shell"),
-            other => panic!("expected Matched(layer-shell), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn niri_picks_layer_shell() {
-        let caps = DeCaps {
-            xdg_desktop: vec!["niri".into()],
-            ..Default::default()
-        };
-        match pick_backend(&registry(), &caps) {
-            PickOutcome::Matched(d) => assert_eq!(d.name, "layer-shell"),
-            other => panic!("expected Matched, got {:?}", other),
+    fn wlroots_desktops_pick_layer_shell() {
+        for desktop in ["hyprland", "sway", "niri"] {
+            let caps = DeCaps {
+                xdg_desktop: vec![desktop.into()],
+                ..Default::default()
+            };
+            match pick_backend(&registry(), &caps) {
+                PickOutcome::Matched(d) => assert_eq!(d.name, "layer-shell"),
+                other => panic!("expected Matched(layer-shell) for {desktop}, got {other:?}"),
+            }
         }
     }
 

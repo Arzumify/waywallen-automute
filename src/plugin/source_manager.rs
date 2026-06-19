@@ -1685,47 +1685,6 @@ return M
     }
 
     #[test]
-    fn discover_only_plugin_is_not_a_source_plugin() {
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_path = dir.path().join("main.lua");
-        std::fs::write(
-            &plugin_path,
-            r#"
-local M = {}
-function M.info()
-    return {
-        name = "remote_only",
-        capabilities = {
-            discover = { search = true },
-        },
-    }
-end
-M.discover = {}
-function M.discover.search(ctx, params)
-    return {
-        items = {
-            { id = "r1", title = "Remote", preview_url = "", author = "" },
-        },
-        has_more = false,
-    }
-end
-return M
-"#,
-        )
-        .unwrap();
-
-        let mut mgr = SourceManager::new().unwrap();
-        mgr.load_plugin(&plugin_path, "test.plugin", "1.0", ENTRY_VERSION)
-            .unwrap();
-        assert!(mgr.plugins().unwrap().is_empty());
-        let sources = mgr.discover_sources().unwrap();
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].plugin_id, "remote_only");
-        block(async { mgr.scan_all(&HashMap::new()).await.unwrap() });
-        assert!(mgr.list().is_empty());
-    }
-
-    #[test]
     fn wallhaven_plugin_is_discover_only() {
         let plugin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("plugins/org.waywallen.wallhaven/main.lua");

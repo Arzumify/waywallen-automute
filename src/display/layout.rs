@@ -590,135 +590,38 @@ mod tests {
     }
 
     #[test]
-    fn point_transform_90_ccw_inverse_corner_mapping() {
-        // Forward: 90° CCW rotation of buffer onto display.
-        //   buffer A=top-left, B=top-right, C=bottom-left, D=bottom-right
-        let c = cfg((0.0, 0.0, 100.0, 200.0), (0.0, 0.0, 200.0, 100.0), 1);
-        // display top-left (0, 0) -> buffer top-right (100, 0)
-        approx(
-            display_point_to_texture(0.0, 0.0, &c).unwrap(),
-            (100.0, 0.0),
-        );
-        // display top-right (200, 0) -> buffer bottom-right (100, 200)
-        approx(
-            display_point_to_texture(200.0, 0.0, &c).unwrap(),
-            (100.0, 200.0),
-        );
-        // display bottom-right (200, 100) -> buffer bottom-left (0, 200)
-        approx(
-            display_point_to_texture(200.0, 100.0, &c).unwrap(),
-            (0.0, 200.0),
-        );
-        // display bottom-left (0, 100) -> buffer top-left (0, 0)
-        approx(
-            display_point_to_texture(0.0, 100.0, &c).unwrap(),
-            (0.0, 0.0),
-        );
-    }
+    fn point_transforms_apply_inverse_mapping() {
+        let square = ((0.0, 0.0, 100.0, 200.0), (0.0, 0.0, 200.0, 100.0));
+        let hd = ((0.0, 0.0, 1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0));
+        let cases = [
+            (square, 1, (0.0, 0.0), (100.0, 0.0)),
+            (square, 1, (200.0, 0.0), (100.0, 200.0)),
+            (square, 1, (200.0, 100.0), (0.0, 200.0)),
+            (square, 1, (0.0, 100.0), (0.0, 0.0)),
+            (hd, 2, (0.0, 0.0), (1920.0, 1080.0)),
+            (hd, 2, (1920.0, 1080.0), (0.0, 0.0)),
+            (hd, 2, (960.0, 540.0), (960.0, 540.0)),
+            (square, 3, (0.0, 0.0), (0.0, 200.0)),
+            (square, 3, (200.0, 0.0), (0.0, 0.0)),
+            (hd, 4, (0.0, 100.0), (1920.0, 100.0)),
+            (hd, 4, (1920.0, 100.0), (0.0, 100.0)),
+            (hd, 4, (960.0, 540.0), (960.0, 540.0)),
+            (square, 5, (100.0, 50.0), (50.0, 100.0)),
+            (square, 5, (0.0, 0.0), (0.0, 0.0)),
+            (square, 5, (200.0, 100.0), (100.0, 200.0)),
+            (hd, 6, (100.0, 0.0), (100.0, 1080.0)),
+            (hd, 6, (100.0, 1080.0), (100.0, 0.0)),
+            (square, 7, (0.0, 0.0), (100.0, 200.0)),
+            (square, 7, (200.0, 100.0), (0.0, 0.0)),
+        ];
 
-    #[test]
-    fn point_transform_180_inverse() {
-        let c = cfg((0.0, 0.0, 1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0), 2);
-        approx(
-            display_point_to_texture(0.0, 0.0, &c).unwrap(),
-            (1920.0, 1080.0),
-        );
-        approx(
-            display_point_to_texture(1920.0, 1080.0, &c).unwrap(),
-            (0.0, 0.0),
-        );
-        approx(
-            display_point_to_texture(960.0, 540.0, &c).unwrap(),
-            (960.0, 540.0),
-        );
-    }
-
-    #[test]
-    fn point_transform_270_ccw_corner_mapping() {
-        // 270 degrees CCW maps the buffer bottom-left to display top-left.
-        // The inverse maps display top-left back to buffer bottom-left.
-        let c270 = cfg((0.0, 0.0, 100.0, 200.0), (0.0, 0.0, 200.0, 100.0), 3);
-        // display top-left -> buffer bottom-left (0, 200)
-        approx(
-            display_point_to_texture(0.0, 0.0, &c270).unwrap(),
-            (0.0, 200.0),
-        );
-        // display top-right -> buffer top-left (0, 0)
-        approx(
-            display_point_to_texture(200.0, 0.0, &c270).unwrap(),
-            (0.0, 0.0),
-        );
-        // Sanity: differs from transform=1 at the same corner.
-        let c90 = cfg((0.0, 0.0, 100.0, 200.0), (0.0, 0.0, 200.0, 100.0), 1);
-        let p1 = display_point_to_texture(0.0, 0.0, &c90).unwrap();
-        let p3 = display_point_to_texture(0.0, 0.0, &c270).unwrap();
-        assert_ne!(p1, p3);
-    }
-
-    #[test]
-    fn point_transform_flipped_horizontal() {
-        let c = cfg((0.0, 0.0, 1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0), 4);
-        // Horizontal flip: x mirrors, y stays.
-        approx(
-            display_point_to_texture(0.0, 100.0, &c).unwrap(),
-            (1920.0, 100.0),
-        );
-        approx(
-            display_point_to_texture(1920.0, 100.0, &c).unwrap(),
-            (0.0, 100.0),
-        );
-        approx(
-            display_point_to_texture(960.0, 540.0, &c).unwrap(),
-            (960.0, 540.0),
-        );
-    }
-
-    #[test]
-    fn point_transform_5_flipped_90_swaps_axes() {
-        // flipped + 90° CCW reduces to swap-axes on the unit square.
-        let c = cfg((0.0, 0.0, 100.0, 200.0), (0.0, 0.0, 200.0, 100.0), 5);
-        // (u, v) = (0.5, 0.5) (display center) → buffer (0.5, 0.5) -> (50, 100)
-        approx(
-            display_point_to_texture(100.0, 50.0, &c).unwrap(),
-            (50.0, 100.0),
-        );
-        // (u, v) = (0, 0) → (0, 0)
-        approx(display_point_to_texture(0.0, 0.0, &c).unwrap(), (0.0, 0.0));
-        // (u, v) = (1, 1) → (1, 1) -> (100, 200)
-        approx(
-            display_point_to_texture(200.0, 100.0, &c).unwrap(),
-            (100.0, 200.0),
-        );
-    }
-
-    #[test]
-    fn point_transform_6_flipped_180_is_vertical_flip() {
-        // flipped + 180° on the unit square = (u, 1-v): vertical flip.
-        let c = cfg((0.0, 0.0, 1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0), 6);
-        approx(
-            display_point_to_texture(100.0, 0.0, &c).unwrap(),
-            (100.0, 1080.0),
-        );
-        approx(
-            display_point_to_texture(100.0, 1080.0, &c).unwrap(),
-            (100.0, 0.0),
-        );
-    }
-
-    #[test]
-    fn point_transform_7_flipped_270() {
-        // flipped + 270° CCW on the unit square = (1-v, 1-u).
-        let c = cfg((0.0, 0.0, 100.0, 200.0), (0.0, 0.0, 200.0, 100.0), 7);
-        // Display (0, 0) -> u=0, v=0 -> (1-0, 1-0) = (1, 1) -> buffer (100, 200)
-        approx(
-            display_point_to_texture(0.0, 0.0, &c).unwrap(),
-            (100.0, 200.0),
-        );
-        // Display (200, 100) -> u=1, v=1 -> (0, 0) -> buffer (0, 0)
-        approx(
-            display_point_to_texture(200.0, 100.0, &c).unwrap(),
-            (0.0, 0.0),
-        );
+        for ((source, dest), transform, point, expected) in cases {
+            let c = cfg(source, dest, transform);
+            approx(
+                display_point_to_texture(point.0, point.1, &c).unwrap(),
+                expected,
+            );
+        }
     }
 
     #[test]

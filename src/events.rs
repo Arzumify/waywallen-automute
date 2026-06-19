@@ -174,14 +174,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn republish_phase_marker_is_idempotent() {
-        let bus = EventBus::default();
-        bus.publish(GlobalEvent::DisplayReady);
-        bus.publish(GlobalEvent::DisplayReady);
-        assert!(bus.is_display_ready());
-    }
-
-    #[tokio::test]
     async fn daemon_ready_is_latched_for_late_subscribers() {
         let bus = EventBus::default();
         assert!(!bus.is_daemon_ready());

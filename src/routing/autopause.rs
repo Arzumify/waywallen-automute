@@ -53,59 +53,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn never_is_never() {
-        for flags in [
-            0,
-            FLAG_NON_MINIMIZED,
-            FLAG_ACTIVE,
-            FLAG_FULLSCREEN,
-            0xFFFFFFFF,
-        ] {
-            assert!(!decide(AutopauseMode::Never, flags));
-        }
-    }
-
-    #[test]
-    fn any_fires_on_non_minimized() {
-        assert!(!decide(AutopauseMode::Any, 0));
-        assert!(decide(AutopauseMode::Any, FLAG_NON_MINIMIZED));
-        // Bit 0 should be the dominant signal here — fullscreen alone
-        // without NON_MINIMIZED is malformed but documents the rule.
-        assert!(!decide(AutopauseMode::Any, FLAG_FULLSCREEN));
-    }
-
-    #[test]
-    fn focus_fires_only_on_active() {
-        assert!(!decide(AutopauseMode::Focus, FLAG_MAXIMIZED));
-        assert!(decide(AutopauseMode::Focus, FLAG_ACTIVE));
-    }
-
-    #[test]
-    fn max_covers_fullscreen() {
-        assert!(decide(AutopauseMode::Max, FLAG_MAXIMIZED));
-        assert!(decide(AutopauseMode::Max, FLAG_FULLSCREEN));
-        assert!(!decide(AutopauseMode::Max, FLAG_ACTIVE));
-        assert!(!decide(AutopauseMode::Max, FLAG_NON_MINIMIZED));
-    }
-
-    #[test]
-    fn focus_or_max_is_union() {
-        assert!(decide(AutopauseMode::FocusOrMax, FLAG_ACTIVE));
-        assert!(decide(AutopauseMode::FocusOrMax, FLAG_MAXIMIZED));
-        assert!(decide(AutopauseMode::FocusOrMax, FLAG_FULLSCREEN));
-        assert!(!decide(AutopauseMode::FocusOrMax, FLAG_NON_MINIMIZED));
-    }
-
-    #[test]
-    fn fullscreen_is_strict() {
-        assert!(!decide(AutopauseMode::FullScreen, FLAG_MAXIMIZED));
-        assert!(decide(AutopauseMode::FullScreen, FLAG_FULLSCREEN));
-    }
-
-    #[test]
-    fn unknown_bits_ignored() {
+    fn decide_maps_modes_and_flags() {
         let stray = 1 << 30;
-        assert!(!decide(AutopauseMode::Any, stray));
-        assert!(decide(AutopauseMode::Any, stray | FLAG_NON_MINIMIZED));
+        let cases = [
+            (AutopauseMode::Never, 0, false),
+            (AutopauseMode::Never, 0xFFFFFFFF, false),
+            (AutopauseMode::Any, 0, false),
+            (AutopauseMode::Any, FLAG_NON_MINIMIZED, true),
+            (AutopauseMode::Any, FLAG_FULLSCREEN, false),
+            (AutopauseMode::Any, stray, false),
+            (AutopauseMode::Any, stray | FLAG_NON_MINIMIZED, true),
+            (AutopauseMode::Focus, FLAG_MAXIMIZED, false),
+            (AutopauseMode::Focus, FLAG_ACTIVE, true),
+            (AutopauseMode::Max, FLAG_MAXIMIZED, true),
+            (AutopauseMode::Max, FLAG_FULLSCREEN, true),
+            (AutopauseMode::Max, FLAG_ACTIVE, false),
+            (AutopauseMode::Max, FLAG_NON_MINIMIZED, false),
+            (AutopauseMode::FocusOrMax, FLAG_ACTIVE, true),
+            (AutopauseMode::FocusOrMax, FLAG_MAXIMIZED, true),
+            (AutopauseMode::FocusOrMax, FLAG_FULLSCREEN, true),
+            (AutopauseMode::FocusOrMax, FLAG_NON_MINIMIZED, false),
+            (AutopauseMode::FullScreen, FLAG_MAXIMIZED, false),
+            (AutopauseMode::FullScreen, FLAG_FULLSCREEN, true),
+        ];
+
+        for (mode, flags, expected) in cases {
+            assert_eq!(decide(mode, flags), expected, "{mode:?} flags={flags:#x}");
+        }
     }
 }

@@ -7,6 +7,7 @@ mod handshake {
     // End-to-end smoke test for the `waywallen-display-v1` handshake.
     //
 
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -17,19 +18,19 @@ mod handshake {
     use waywallen::renderer_manager::RendererManager;
     use waywallen::routing::Router;
 
-    #[tokio::test]
-    async fn handshake_up_to_display_accepted() {
-        let sock = common::tmp_sock("display-handshake");
+    async fn start_display_endpoint(sock_name: &str) -> (PathBuf, tokio::task::JoinHandle<()>) {
+        let sock = common::tmp_sock(sock_name);
         let _ = std::fs::remove_file(&sock);
 
         let mgr = Arc::new(RendererManager::new_default());
         let router = Router::new(Arc::clone(&mgr));
-
         let sock_for_task = sock.clone();
-        let router_for_task = Arc::clone(&router);
         let (events_tx, _) = tokio::sync::broadcast::channel(8);
-        let server_task = tokio::spawn(async move {
-            let _ = endpoint::serve(&sock_for_task, router_for_task, events_tx).await;
+        let server_task = tokio::spawn({
+            let router = Arc::clone(&router);
+            async move {
+                let _ = endpoint::serve(&sock_for_task, router, events_tx).await;
+            }
         });
 
         assert!(
@@ -38,73 +39,109 @@ mod handshake {
             sock.display()
         );
 
-        // Drive the client side in a blocking task.
-        let sock_for_client = sock.clone();
-        let client_handle = tokio::task::spawn_blocking(move || -> anyhow::Result<u64> {
-            use std::os::unix::net::UnixStream;
-            let stream = UnixStream::connect(&sock_for_client)?;
+        (sock, server_task)
+    }
 
-            // hello → welcome
-            codec::send_request(
-                &stream,
-                &Request::Hello {
-                    protocol: PROTOCOL_NAME.to_string(),
-                    client_name: "handshake-test".to_string(),
-                    client_version: "0.0.1".to_string(),
-                    client_protocol_version: PROTOCOL_VERSION,
-                },
-                &[],
-            )
-            .map_err(|e| anyhow::anyhow!("send hello: {e}"))?;
+    fn drive_display_registration(
+        sock: &Path,
+        client_protocol_version: u32,
+    ) -> anyhow::Result<u64> {
+        use std::os::unix::net::UnixStream;
 
-            let (welcome, _fds) =
-                codec::recv_event(&stream).map_err(|e| anyhow::anyhow!("recv welcome: {e}"))?;
-            match welcome {
-                Event::Welcome {
-                    server_version,
-                    features,
-                } => {
-                    assert!(
-                        server_version.starts_with("waywallen "),
-                        "server_version={server_version}"
-                    );
-                    assert!(
-                        features.iter().any(|s| s == "explicit_sync_fd"),
-                        "explicit_sync_fd not in features={features:?}"
-                    );
-                }
-                other => panic!("expected welcome, got opcode {}", other.opcode()),
+        let stream = UnixStream::connect(sock)?;
+        codec::send_request(
+            &stream,
+            &Request::Hello {
+                protocol: PROTOCOL_NAME.to_string(),
+                client_name: "handshake-test".to_string(),
+                client_version: "0.0.1".to_string(),
+                client_protocol_version,
+            },
+            &[],
+        )
+        .map_err(|e| anyhow::anyhow!("send hello: {e}"))?;
+
+        let (welcome, _fds) =
+            codec::recv_event(&stream).map_err(|e| anyhow::anyhow!("recv welcome: {e}"))?;
+        match welcome {
+            Event::Welcome {
+                server_version,
+                features,
+            } => {
+                assert!(
+                    server_version.starts_with("waywallen "),
+                    "server_version={server_version}"
+                );
+                assert!(
+                    features.iter().any(|s| s == "explicit_sync_fd"),
+                    "explicit_sync_fd not in features={features:?}"
+                );
             }
+            other => panic!("expected welcome, got opcode {}", other.opcode()),
+        }
 
-            // register_display → display_accepted
-            codec::send_request(
-                &stream,
-                &Request::RegisterDisplay {
-                    name: "DP-test".to_string(),
-                    instance_id: String::new(),
-                    width: 1920,
-                    height: 1080,
-                    refresh_mhz: 60_000,
-                    drm_render_major: 0,
-                    drm_render_minor: 0,
-                    properties: Vec::new(),
-                },
-                &[],
-            )
-            .map_err(|e| anyhow::anyhow!("send register_display: {e}"))?;
+        codec::send_request(
+            &stream,
+            &Request::RegisterDisplay {
+                name: "DP-test".to_string(),
+                instance_id: String::new(),
+                width: 1920,
+                height: 1080,
+                refresh_mhz: 60_000,
+                drm_render_major: 0,
+                drm_render_minor: 0,
+                properties: Vec::new(),
+            },
+            &[],
+        )
+        .map_err(|e| anyhow::anyhow!("send register_display: {e}"))?;
 
-            let (accepted, _fds) = codec::recv_event(&stream)
-                .map_err(|e| anyhow::anyhow!("recv display_accepted: {e}"))?;
-            let id = match accepted {
-                Event::DisplayAccepted { display_id } => display_id,
-                other => {
-                    panic!("expected display_accepted, got opcode {}", other.opcode())
-                }
-            };
+        let (accepted, _fds) = codec::recv_event(&stream)
+            .map_err(|e| anyhow::anyhow!("recv display_accepted: {e}"))?;
+        match accepted {
+            Event::DisplayAccepted { display_id } => Ok(display_id),
+            other => panic!("expected display_accepted, got opcode {}", other.opcode()),
+        }
+    }
 
-            // After display_accepted, the server will try to find a
-            // renderer, fail, and close. The test's job is just to record
-            Ok(id)
+    fn expect_version_reject(sock: &Path, probe: u32) -> anyhow::Result<()> {
+        use std::os::unix::net::UnixStream;
+
+        let stream = UnixStream::connect(sock)?;
+        codec::send_request(
+            &stream,
+            &Request::Hello {
+                protocol: PROTOCOL_NAME.to_string(),
+                client_name: "version-probe".to_string(),
+                client_version: "0.0.1".to_string(),
+                client_protocol_version: probe,
+            },
+            &[],
+        )
+        .map_err(|e| anyhow::anyhow!("send: {e}"))?;
+
+        match codec::recv_event(&stream) {
+            Ok((Event::Error { code, message }, _)) => anyhow::ensure!(
+                code == error_code::VERSION_UNSUPPORTED,
+                "expected VERSION_UNSUPPORTED ({}), got code={code} msg={message:?}",
+                error_code::VERSION_UNSUPPORTED,
+            ),
+            Ok((other, _)) => {
+                panic!("expected Error event, got opcode {}", other.opcode())
+            }
+            Err(e) => panic!("expected Error event, got recv err: {e}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handshake_up_to_display_accepted() {
+        let (sock, server_task) = start_display_endpoint("display-handshake").await;
+
+        let sock_for_client = sock.clone();
+        let client_handle = tokio::task::spawn_blocking(move || {
+            drive_display_registration(&sock_for_client, PROTOCOL_VERSION)
         });
 
         let display_id = client_handle
@@ -121,24 +158,7 @@ mod handshake {
 
     #[tokio::test]
     async fn rejects_wrong_protocol_string() {
-        let sock = common::tmp_sock("display-bad-proto");
-        let _ = std::fs::remove_file(&sock);
-
-        let mgr = Arc::new(RendererManager::new_default());
-        let router = Router::new(Arc::clone(&mgr));
-        let sock_for_task = sock.clone();
-        let (events_tx, _) = tokio::sync::broadcast::channel(8);
-        let server_task = tokio::spawn({
-            let router = Arc::clone(&router);
-            async move {
-                let _ = endpoint::serve(&sock_for_task, router, events_tx).await;
-            }
-        });
-
-        assert!(
-            common::wait_for_sock_bind(&sock, Duration::from_secs(2)).await,
-            "display endpoint did not bind"
-        );
+        let (sock, server_task) = start_display_endpoint("display-bad-proto").await;
 
         let sock_for_client = sock.clone();
         let got_error = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
@@ -175,70 +195,19 @@ mod handshake {
     /// must produce `error{code = VERSION_UNSUPPORTED}` followed by close.
     #[tokio::test]
     async fn rejects_unsupported_client_protocol_version() {
-        let sock = common::tmp_sock("display-bad-version");
-        let _ = std::fs::remove_file(&sock);
+        let (sock, server_task) = start_display_endpoint("display-bad-version").await;
 
-        let mgr = Arc::new(RendererManager::new_default());
-        let router = Router::new(Arc::clone(&mgr));
-        let sock_for_task = sock.clone();
-        let (events_tx, _) = tokio::sync::broadcast::channel(8);
-        let server_task = tokio::spawn({
-            let router = Arc::clone(&router);
-            async move {
-                let _ = endpoint::serve(&sock_for_task, router, events_tx).await;
-            }
-        });
+        let mut probes = vec![PROTOCOL_VERSION.saturating_add(99)];
+        if let Some(low_probe) = endpoint::MIN_SUPPORTED_CLIENT_VERSION.checked_sub(1) {
+            probes.push(low_probe);
+        }
 
-        assert!(
-            common::wait_for_sock_bind(&sock, Duration::from_secs(2)).await,
-            "display endpoint did not bind"
-        );
-
-        // Probe both ends of the range: too high and too low (saturating
-        // to 0 if PROTOCOL_VERSION is already 0, in which case low_probe
-        let high_probe = PROTOCOL_VERSION.saturating_add(99);
-        for probe in [high_probe, PROTOCOL_VERSION.saturating_sub(1)] {
-            if probe == PROTOCOL_VERSION {
-                // PROTOCOL_VERSION is 0 — skip the underflow probe.
-                continue;
-            }
+        for probe in probes {
             let sock_for_client = sock.clone();
-            let saw_version_error = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-                use std::os::unix::net::UnixStream;
-                let stream = UnixStream::connect(&sock_for_client)?;
-                codec::send_request(
-                    &stream,
-                    &Request::Hello {
-                        protocol: PROTOCOL_NAME.to_string(),
-                        client_name: "version-probe".to_string(),
-                        client_version: "0.0.1".to_string(),
-                        client_protocol_version: probe,
-                    },
-                    &[],
-                )
-                .map_err(|e| anyhow::anyhow!("send: {e}"))?;
-                match codec::recv_event(&stream) {
-                    Ok((Event::Error { code, message }, _)) => {
-                        anyhow::ensure!(
-                            code == error_code::VERSION_UNSUPPORTED,
-                            "expected VERSION_UNSUPPORTED ({}), got code={code} msg={message:?}",
-                            error_code::VERSION_UNSUPPORTED,
-                        );
-                        Ok(true)
-                    }
-                    Ok((other, _)) => {
-                        panic!("expected Error event, got opcode {}", other.opcode())
-                    }
-                    Err(e) => panic!("expected Error event, got recv err: {e}"),
-                }
-            })
-            .await
-            .expect("client join")
-            .expect("client flow");
-            assert!(
-                saw_version_error,
-                "probe v{probe}: server must send VERSION_UNSUPPORTED error"
-            );
+            tokio::task::spawn_blocking(move || expect_version_reject(&sock_for_client, probe))
+                .await
+                .expect("client join")
+                .expect("client flow");
         }
 
         server_task.abort();
