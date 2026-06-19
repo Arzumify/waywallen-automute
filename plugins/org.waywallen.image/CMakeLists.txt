@@ -42,7 +42,13 @@ install(TARGETS waywallen-image-renderer
 
 install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/plugin.toml
-    ${CMAKE_CURRENT_SOURCE_DIR}/image.lua
+    ${CMAKE_CURRENT_SOURCE_DIR}/main.lua
     ${CMAKE_CURRENT_SOURCE_DIR}/files.txt
     DESTINATION ${_IMAGE_PLUGIN_DIR}
+)
+
+install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/image/source.lua
+    ${CMAKE_CURRENT_SOURCE_DIR}/image/wallpaper.lua
+    DESTINATION ${_IMAGE_PLUGIN_DIR}/image
 )

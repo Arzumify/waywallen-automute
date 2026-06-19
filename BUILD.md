@@ -30,8 +30,8 @@ install/bin/
     waywallen                          # daemon (Rust)
     waywallen-ui                       # Qt/QML UI
 install/share/waywallen/plugins/
-    org.waywallen.image/{plugin.toml, files.txt, image.lua, bin/waywallen-image-renderer}
-    org.waywallen.video/{plugin.toml, files.txt, video.lua, bin/waywallen-video-renderer}
+    org.waywallen.image/{plugin.toml, files.txt, main.lua, image/..., bin/waywallen-image-renderer}
+    org.waywallen.video/{plugin.toml, files.txt, main.lua, video/..., bin/waywallen-video-renderer}
 install/share/{applications,metainfo,icons/...}/
 ```
 

@@ -111,8 +111,8 @@ pub enum Error {
     #[error("source plugin '{0}' does not support discover")]
     DiscoverUnsupported(String),
 
-    /// Source plugin's `discover(ctx, params)` / `details(ctx, id)` Lua
-    /// callback raised. The stringified Lua error rides in `message`.
+    /// Source plugin's `discover.*` Lua callback raised. The stringified
+    /// Lua error rides in `message`.
     #[error("source_plugin '{plugin}'.discover() failed: {message}")]
     DiscoverFailed { plugin: String, message: String },
 

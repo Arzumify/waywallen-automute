@@ -649,6 +649,15 @@ pub async fn list_library_snapshots(
     };
     let mut out = Vec::with_capacity(libs.len());
     for lib in libs {
+        let metadata = crate::model::repo::get_library_metadata(db, lib.id)
+            .await
+            .unwrap_or_default();
+        if metadata
+            .get(crate::model::repo::LIBRARY_METADATA_MANAGED_KEY)
+            .is_some_and(|v| v == crate::model::repo::LIBRARY_METADATA_MANAGED_REMOTE)
+        {
+            continue;
+        }
         let plugin_name = repo::find_plugin_by_id(db, lib.plugin_id)
             .await
             .ok()
@@ -737,6 +746,27 @@ pub async fn refresh_sources(app: &Arc<AppState>) -> Result<usize> {
     app.events
         .publish(crate::events::GlobalEvent::StatusChanged);
     result
+}
+
+pub async fn notify_wallpaper_db_changed(app: &Arc<AppState>, count: usize) {
+    app.queue.lock().await.reset_shuffle_round();
+
+    let probe = app.probe.clone();
+    let db = app.db.clone();
+    app.tasks.spawn_async_unique(
+        crate::tasks::TaskKind::Generic,
+        "probe/refresh",
+        "probe/post-db-change",
+        async move {
+            crate::probe::task::run_pending(&db, probe)
+                .await
+                .map(|_| ())
+                .map_err(anyhow::Error::from)
+        },
+    );
+
+    app.events
+        .publish(crate::events::GlobalEvent::SyncFinished { count });
 }
 
 async fn refresh_sources_inner(app: &Arc<AppState>) -> Result<usize> {

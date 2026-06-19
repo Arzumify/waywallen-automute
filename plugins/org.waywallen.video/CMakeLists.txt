@@ -33,7 +33,13 @@ install(TARGETS waywallen-video-renderer
 
 install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/plugin.toml
-    ${CMAKE_CURRENT_SOURCE_DIR}/video.lua
+    ${CMAKE_CURRENT_SOURCE_DIR}/main.lua
     ${CMAKE_CURRENT_SOURCE_DIR}/files.txt
     DESTINATION ${_VIDEO_PLUGIN_DIR}
+)
+
+install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/video/source.lua
+    ${CMAKE_CURRENT_SOURCE_DIR}/video/wallpaper.lua
+    DESTINATION ${_VIDEO_PLUGIN_DIR}/video
 )

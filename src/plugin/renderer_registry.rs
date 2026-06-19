@@ -7,13 +7,11 @@ use crate::wallpaper::types::WallpaperType;
 // ---------------------------------------------------------------------------
 // Installable-plugin manifest (`plugins/<dir>/plugin.toml`)
 
-/// One installable plugin: a `[plugin]` header plus components.
-/// A plugin may provide one Lua source and any number of renderers.
+/// One installable plugin: a `[plugin]` header plus optional Lua entry
+/// and any number of renderers.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginManifest {
     pub plugin: PluginMeta,
-    #[serde(default)]
-    pub source: Option<SourceComponent>,
     /// Renderer components keyed by component name (the map key becomes
     /// `RendererDef.name`).
     #[serde(default)]
@@ -28,6 +26,12 @@ pub struct PluginMeta {
     pub name: String,
     #[serde(default = "default_version")]
     pub version: String,
+    /// Lua entry file path, relative to the plugin directory.
+    #[serde(default)]
+    pub entry: Option<PathBuf>,
+    /// Lua entry ABI version supported by `entry`.
+    #[serde(default)]
+    pub entry_version: Option<u32>,
     /// Declarative file manifest with paths relative to the plugin dir.
     /// Loaded during scanning from the required `files.txt`.
     #[serde(skip)]
@@ -42,25 +46,21 @@ pub struct PluginMeta {
 /// ship beside its `plugin.toml`. One path per line; blanks ignored.
 pub const PLUGIN_FILES_MANIFEST: &str = "files.txt";
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct SourceComponent {
-    /// Lua file path, relative to the plugin directory.
-    pub lua: PathBuf,
-}
-
-/// Source component discovered in a plugin manifest.
-/// Carries the owning plugin domain id.
+/// Lua entry discovered in a plugin manifest.
+/// Carries the owning plugin metadata and entry ABI version.
 #[derive(Debug, Clone)]
-pub struct SourceRef {
+pub struct EntryRef {
     pub plugin_id: String,
-    pub lua: PathBuf,
+    pub plugin_version: String,
+    pub entry: PathBuf,
+    pub entry_version: u32,
 }
 
 /// Components collected from scanning one or more `plugins/` directories.
 #[derive(Debug, Default)]
 pub struct PluginScan {
     pub renderers: Vec<RendererDef>,
-    pub sources: Vec<SourceRef>,
+    pub entries: Vec<EntryRef>,
     /// Parsed plugin metadata (id/name/version + resolved `files`),
     /// retained for introspection.
     pub plugins: Vec<PluginMeta>,
@@ -69,12 +69,12 @@ pub struct PluginScan {
 impl PluginScan {
     pub fn merge(&mut self, other: PluginScan) {
         self.renderers.extend(other.renderers);
-        self.sources.extend(other.sources);
+        self.entries.extend(other.entries);
         self.plugins.extend(other.plugins);
     }
 
     /// Installable-plugin view of the scan.
-    /// One entry per `[plugin]`, with source presence included.
+    /// One entry per `[plugin]`, with Lua entry presence included.
     pub fn packages(&self) -> Vec<PluginPackageMeta> {
         self.plugins
             .iter()
@@ -82,7 +82,7 @@ impl PluginScan {
                 id: m.id.clone(),
                 name: m.name.clone(),
                 version: m.version.clone(),
-                has_source: self.sources.iter().any(|s| s.plugin_id == m.id),
+                has_entry: self.entries.iter().any(|s| s.plugin_id == m.id),
                 system: m.system,
             })
             .collect()
@@ -96,7 +96,7 @@ pub struct PluginPackageMeta {
     pub id: String,
     pub name: String,
     pub version: String,
-    pub has_source: bool,
+    pub has_entry: bool,
     /// Not installed under `$XDG_DATA_HOME` (bundled / system / explicit root).
     pub system: bool,
 }
@@ -536,11 +536,24 @@ pub fn scan_plugins(dir: &Path) -> PluginScan {
             ),
         }
 
-        if let Some(src) = manifest.source {
-            out.sources.push(SourceRef {
-                plugin_id: meta.id.clone(),
-                lua: resolve_rel(&plugin_dir, src.lua),
-            });
+        if let Some(entry) = meta.entry.take() {
+            match meta.entry_version {
+                Some(entry_version) => out.entries.push(EntryRef {
+                    plugin_id: meta.id.clone(),
+                    plugin_version: meta.version.clone(),
+                    entry: resolve_rel(&plugin_dir, entry),
+                    entry_version,
+                }),
+                None => log::warn!(
+                    "plugin {}: plugin.entry requires plugin.entry_version",
+                    meta.id
+                ),
+            }
+        } else if meta.entry_version.is_some() {
+            log::warn!(
+                "plugin {}: plugin.entry_version ignored without plugin.entry",
+                meta.id
+            );
         }
 
         for (name, mut def) in manifest.renderers {
@@ -612,7 +625,7 @@ pub fn build_default_plugin_scan() -> PluginScan {
 }
 
 /// Return the two canonical plugin directories (bundled + XDG) for a
-/// given subdirectory name (e.g. `"renderers"` or `"sources"`). Returned
+/// given subdirectory name (e.g. `"plugins"` or `"displays"`). Returned
 pub fn standard_plugin_dirs(subdir: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
@@ -693,16 +706,15 @@ mod schema_tests {
     }
 
     #[test]
-    fn manifest_parses_source_extras_and_settings() {
-        // End-to-end: plugin.toml to source ref and RendererDef.
+    fn manifest_parses_entry_extras_and_settings() {
+        // End-to-end: plugin.toml to Lua entry metadata and RendererDef.
         // Wire-level details are asserted by focused tests elsewhere.
         let src = r#"
             [plugin]
             id = "org.waywallen.mpv"
             name = "mpv"
-
-            [source]
-            lua = "mpv.lua"
+            entry = "mpv.lua"
+            entry_version = 2
 
             [renderers.waywallen-mpv]
             bin = "bin/waywallen-mpv-renderer"
@@ -716,7 +728,8 @@ mod schema_tests {
             hwdec     = { type = "string", default = "auto", identity = false }
         "#;
         let m: PluginManifest = toml::from_str(src).expect("manifest parses");
-        assert_eq!(m.source.as_ref().unwrap().lua, PathBuf::from("mpv.lua"));
+        assert_eq!(m.plugin.entry.as_ref().unwrap(), &PathBuf::from("mpv.lua"));
+        assert_eq!(m.plugin.entry_version, Some(2));
         let r = &m.renderers["waywallen-mpv"];
         assert_eq!(r.spawn_version, Some(1));
         assert_eq!(r.extras, vec!["subtitle".to_string()]);

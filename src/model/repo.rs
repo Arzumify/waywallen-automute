@@ -16,6 +16,9 @@ use crate::probe::stat::FileStat;
 use crate::tasks::now_ms;
 use sea_orm::ActiveValue::NotSet;
 
+pub const LIBRARY_METADATA_MANAGED_KEY: &str = "waywallen.managed";
+pub const LIBRARY_METADATA_MANAGED_REMOTE: &str = "remote";
+
 // ---------------------------------------------------------------------------
 // source_plugin
 
@@ -658,6 +661,14 @@ pub async fn delete_items_synced_before(
         .exec(db)
         .await
         .context("sweep stale items by sync_at")?;
+    Ok(res.rows_affected)
+}
+
+pub async fn delete_item(db: &DatabaseConnection, item_id: i64) -> Result<u64> {
+    let res = item::Entity::delete_by_id(item_id)
+        .exec(db)
+        .await
+        .with_context(|| format!("delete item id={item_id}"))?;
     Ok(res.rows_affected)
 }
 

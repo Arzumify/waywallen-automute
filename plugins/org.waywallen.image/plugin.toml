@@ -1,12 +1,11 @@
-# waywallen-image — the canonical image renderer + source for waywallen.
+# waywallen-image — the canonical image renderer + Lua entry for waywallen.
 
 [plugin]
 id = "org.waywallen.image"
 name = "Image"
 version = "0.2.1"
-
-[source]
-lua = "image.lua"
+entry = "main.lua"
+entry_version = 2
 
 [renderers.waywallen-image]
 bin = "../../../../bin/waywallen-image-renderer"

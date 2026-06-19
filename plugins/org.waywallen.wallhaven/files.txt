@@ -1,4 +1,6 @@
 main.lua
 plugin.toml
 wallhaven/api.lua
+wallhaven/discover.lua
 wallhaven/map.lua
+wallhaven/wallpaper.lua

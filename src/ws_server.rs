@@ -825,33 +825,30 @@ async fn resolve_remote_source_id(state: &Arc<AppState>, source_id: &str) -> Res
 
 async fn source_plugin_version(state: &Arc<AppState>, source_id: &str) -> String {
     let sm = state.source_manager.lock().await;
-    sm.plugins()
-        .ok()
-        .and_then(|plugins| {
-            plugins
-                .into_iter()
-                .find(|p| p.name == source_id)
-                .map(|p| p.version)
-        })
+    sm.plugin_version(source_id)
         .unwrap_or_else(|| "0.0.0".to_string())
 }
 
-async fn ensure_remote_library(state: &Arc<AppState>, source_id: &str, dir: &Path) -> Result<()> {
+async fn ensure_remote_library(
+    state: &Arc<AppState>,
+    source_id: &str,
+    dir: &Path,
+) -> Result<crate::model::entities::library::Model> {
     let version = source_plugin_version(state, source_id).await;
     let plugin = repo::upsert_plugin(&state.db, source_id, &version).await?;
     let dir_s = dir.to_string_lossy().to_string();
-    if repo::find_library(&state.db, plugin.id, &dir_s)
-        .await?
-        .is_none()
-    {
-        let lib = repo::add_library(&state.db, plugin.id, &dir_s).await?;
-        state.router.upsert_library(LibrarySnapshot {
-            id: lib.id,
-            path: lib.path,
-            plugin_name: source_id.to_string(),
-        });
-    }
-    Ok(())
+    let lib = match repo::find_library(&state.db, plugin.id, &dir_s).await? {
+        Some(lib) => lib,
+        None => repo::add_library(&state.db, plugin.id, &dir_s).await?,
+    };
+    repo::set_library_metadata_value(
+        &state.db,
+        lib.id,
+        repo::LIBRARY_METADATA_MANAGED_KEY,
+        Some(repo::LIBRARY_METADATA_MANAGED_REMOTE),
+    )
+    .await?;
+    Ok(lib)
 }
 
 async fn write_remote_sidecar(path: &Path, info: &DiscoverDownload) -> Result<()> {
@@ -907,6 +904,57 @@ async fn download_remote_file(url: &str, path: &Path) -> Result<()> {
     result
 }
 
+async fn upsert_remote_download(
+    state: &Arc<AppState>,
+    source_id: &str,
+    dir: &Path,
+    path: &Path,
+    info: &DiscoverDownload,
+) -> Result<()> {
+    if info.wp_type.trim().is_empty() {
+        return Err(anyhow!("download wp_type is empty"));
+    }
+    let lib = ensure_remote_library(state, source_id, dir).await?;
+    let rel = path
+        .strip_prefix(dir)
+        .ok()
+        .and_then(|p| p.to_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("download target is not under remote library"))?;
+    let title = if info.title.trim().is_empty() {
+        path.file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("Remote wallpaper")
+    } else {
+        info.title.as_str()
+    };
+    let item = repo::upsert_item(
+        &state.db,
+        repo::ItemUpsertArgs {
+            plugin_id: lib.plugin_id,
+            library_id: lib.id,
+            path: rel,
+            ty: &info.wp_type,
+            display_name: title,
+            preview_path: None,
+            description: (!info.description.trim().is_empty()).then_some(info.description.as_str()),
+            external_id: (!info.external_id.trim().is_empty()).then_some(info.external_id.as_str()),
+            size: info.size,
+            width: info.width.and_then(|v| i32::try_from(v).ok()),
+            height: info.height.and_then(|v| i32::try_from(v).ok()),
+            content_rating: info
+                .content_rating
+                .as_deref()
+                .filter(|v| !v.trim().is_empty()),
+        },
+    )
+    .await?;
+    let tags = repo::upsert_tags(&state.db, &info.tags).await?;
+    let tag_ids: Vec<i64> = tags.into_iter().map(|tag| tag.id).collect();
+    repo::replace_item_tags(&state.db, item.id, &tag_ids).await?;
+    Ok(())
+}
+
 async fn run_remote_download(state: Arc<AppState>, source_id: String, id: String) -> Result<()> {
     publish_remote_download_progress(
         &state,
@@ -926,7 +974,6 @@ async fn run_remote_download(state: Arc<AppState>, source_id: String, id: String
 
     let dir = remote_content_dir(&source_id);
     tokio::fs::create_dir_all(&dir).await?;
-    ensure_remote_library(&state, &source_id, &dir).await?;
 
     let filename = safe_remote_filename(&info.filename, &id);
     let target = dir.join(filename);
@@ -939,7 +986,8 @@ async fn run_remote_download(state: Arc<AppState>, source_id: String, id: String
     );
     download_remote_file(&info.url, &target).await?;
     write_remote_sidecar(&target, &info).await?;
-    control::refresh_sources(&state).await?;
+    upsert_remote_download(&state, &source_id, &dir, &target, &info).await?;
+    control::notify_wallpaper_db_changed(&state, 1).await;
     publish_remote_download_progress(&state, &source_id, &id, pb::RemoteDownloadState::Done, "");
     Ok(())
 }
@@ -1131,7 +1179,7 @@ async fn dispatch_inner(
                         id: pkg.id.clone(),
                         name: pkg.name.clone(),
                         version: pkg.version.clone(),
-                        has_source: pkg.has_source,
+                        has_source: pkg.has_entry,
                         renderers,
                         system: pkg.system,
                     }
@@ -1790,8 +1838,9 @@ async fn dispatch_inner(
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => return Err(Error::Io(e)),
                     }
+                    repo::delete_item(&state.db, item.id).await?;
                 }
-                control::refresh_sources(state).await?;
+                control::notify_wallpaper_db_changed(state, 0).await;
                 Res::RemoteUninstall(pb::RemoteUninstallResponse {
                     removed: true,
                     error: String::new(),

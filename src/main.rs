@@ -230,9 +230,9 @@ async fn async_main() -> anyhow::Result<()> {
         }
     }
     // Installable-plugin (package) list for the UI's plugin-centric view.
-    // Computed before `sources` is taken so `has_source` is accurate.
+    // Computed before `entries` is taken so entry presence is accurate.
     let plugin_packages = Arc::new(plugin_scan.packages());
-    let source_refs = std::mem::take(&mut plugin_scan.sources);
+    let entry_refs = std::mem::take(&mut plugin_scan.entries);
 
     let mut registry = plugin::renderer_registry::RendererRegistry::new();
     for def in &plugin_scan.renderers {
@@ -449,18 +449,23 @@ async fn async_main() -> anyhow::Result<()> {
     // async_main can continue bringing up services.
     {
         let source_mgr = source_mgr.clone();
-        let source_refs = source_refs.clone();
+        let entry_refs = entry_refs.clone();
         let state_for_task = state.clone();
         state
             .tasks
             .spawn_async(tasks::TaskKind::Startup, "startup/sources", async move {
-                // Load Lua source components on the blocking pool; each ref
-                // carries the owning plugin domain id.
+                // Load Lua entries on the blocking pool; each ref carries
+                // the owning plugin domain id and entry ABI version.
                 tokio::task::spawn_blocking(move || {
                     let mut sm = source_mgr.blocking_lock();
-                    for r in &source_refs {
-                        if let Err(e) = sm.load_plugin(&r.lua, &r.plugin_id) {
-                            log::warn!("load source {}: {e:#}", r.lua.display());
+                    for r in &entry_refs {
+                        if let Err(e) = sm.load_plugin(
+                            &r.entry,
+                            &r.plugin_id,
+                            &r.plugin_version,
+                            r.entry_version,
+                        ) {
+                            log::warn!("load entry {}: {e:#}", r.entry.display());
                         }
                     }
                 })

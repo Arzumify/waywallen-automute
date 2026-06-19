@@ -1,21 +1,7 @@
 local M = {}
 
-local IMAGE_EXTS = {
-    png = true,
-    jpg = true,
-    jpeg = true,
-}
-
-local function strip_ext(name)
-    return name:match("(.+)%.[^.]+$") or name
-end
-
 local function file_ext(path)
     return string.lower(path:match("%.([^./?#]+)$") or "jpg")
-end
-
-local function basename(path)
-    return path:match("([^/]+)$") or path
 end
 
 local function tags_from_detail(detail)
@@ -78,6 +64,7 @@ function M.download(detail)
     local ext = file_ext(detail.path or "")
     local thumbs = detail.thumbs or {}
     return {
+        wp_type = "image",
         url = detail.path or "",
         filename = "wallhaven-" .. tostring(detail.id or "wallpaper") .. "." .. ext,
         title = title(detail),
@@ -89,44 +76,6 @@ function M.download(detail)
         width = detail.dimension_x,
         height = detail.dimension_y,
         content_rating = rating(detail.purity),
-    }
-end
-
-function M.image_paths(ctx, dir)
-    local out = {}
-    local seen = {}
-    for _, path in ipairs(ctx.glob(dir .. "/*.*")) do
-        local ext = ctx.extension(path)
-        if ext and IMAGE_EXTS[string.lower(ext)] and not seen[path] then
-            seen[path] = true
-            table.insert(out, path)
-        end
-    end
-    return out
-end
-
-function M.scan_entry(ctx, dir, path)
-    local sidecar = path .. ".json"
-    local meta = {}
-    local raw = ctx.read_file(sidecar)
-    if raw and raw ~= "" then
-        meta = ctx.json_parse(raw) or {}
-    end
-
-    local filename = ctx.filename(path) or basename(path)
-    local name = meta.title or strip_ext(filename)
-    return {
-        name = name,
-        wp_type = "image",
-        resource = path,
-        library_root = dir,
-        description = meta.description,
-        tags = meta.tags or {},
-        external_id = meta.external_id,
-        size = meta.size or ctx.file_size(path),
-        width = meta.width,
-        height = meta.height,
-        content_rating = meta.content_rating,
     }
 end
 

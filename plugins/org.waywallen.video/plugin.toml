@@ -1,4 +1,4 @@
-# waywallen-video — the canonical video renderer + source for waywallen.
+# waywallen-video — the canonical video renderer + Lua entry for waywallen.
 #
 # Pipeline: best-effort Vulkan hwdevice (FFmpeg AV_HWDEVICE_TYPE_VULKAN)
 # decode → sw landing frame → swscale to NV12 → GPU NV12→RGBA compute
@@ -9,9 +9,8 @@
 id = "org.waywallen.video"
 name = "Video"
 version = "0.2.1"
-
-[source]
-lua = "video.lua"
+entry = "main.lua"
+entry_version = 2
 
 [renderers.waywallen-video]
 bin = "../../../../bin/waywallen-video-renderer"
