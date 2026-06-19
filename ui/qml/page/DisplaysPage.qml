@@ -533,10 +533,12 @@ MD.Page {
                                     const r = connectedRow.renderer;
                                     if (!r)
                                         return "";
-                                    const resolution = root.selected
-                                        ? (root.selected.width + " × " + root.selected.height)
-                                        : "";
-                                    return (r.status || "") + " · " + (r.fps || 0) + " fps · " + resolution;
+                                    const parts = [(r.status || ""), (r.fps || 0) + " fps"];
+                                    const textureWidth = Number(r.textureWidth || 0);
+                                    const textureHeight = Number(r.textureHeight || 0);
+                                    if (textureWidth > 0 && textureHeight > 0)
+                                        parts.push(textureWidth + " × " + textureHeight);
+                                    return parts.join(" · ");
                                 }
                                 typescale: MD.Token.typescale.label_small
                                 color: MD.Token.color.on_surface_variant
