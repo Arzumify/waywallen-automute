@@ -97,9 +97,9 @@ mod tests {
     #[test]
     fn check_pause_priority() {
         let cases = [
-            (AutopauseMode::Never, AutopauseMode::Never, 0, RendererStatus::Playing),
-            (AutopauseMode::Any, AutopauseMode::Any, 0, RendererStatus::Paused(PausedRendererStatus::Paused)),
-            (AutopauseMode::Never, AutopauseMode::Any, 0, RendererStatus::Paused(PausedRendererStatus::Muted)),
+            (AutopauseMode::Never, AutopauseMode::Never, FLAG_NON_MINIMIZED, RendererStatus::Playing),
+            (AutopauseMode::Any, AutopauseMode::Any, FLAG_NON_MINIMIZED, RendererStatus::Paused(PausedRendererStatus::Paused)),
+            (AutopauseMode::Never, AutopauseMode::Any, FLAG_NON_MINIMIZED, RendererStatus::Paused(PausedRendererStatus::Muted)),
         ];
 
         for (pause_mode, mute_mode, flags, expected) in cases {
