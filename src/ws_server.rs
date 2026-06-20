@@ -2169,6 +2169,14 @@ async fn dispatch_inner(
                         s.global.autopause.pause_on_lock = ap.pause_on_lock;
                         s.global.autopause.pause_on_user_switch = ap.pause_on_user_switch;
                     }
+                    if let Some(am) = g.automute.as_ref() {
+                        s.global.automute.mode = autopause_mode_from_pb(am.mode);
+                        s.global.automute.resume_ms = am.resume_ms;
+                        s.global.automute.fade_in_ms = am.fade_in_ms;
+                        s.global.automute.fade_out_ms = am.fade_out_ms;
+                        s.global.automute.pause_on_lock = am.pause_on_lock;
+                        s.global.automute.pause_on_user_switch = am.pause_on_user_switch;
+                    }
                     if !g.queue_mode.is_empty() {
                         s.global.queue_mode = g.queue_mode.clone();
                     }
