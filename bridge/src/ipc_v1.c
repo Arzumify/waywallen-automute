@@ -63,6 +63,7 @@ int ww_buf_reserve(ww_buf_t *b, size_t additional) {
 static int w_bytes(ww_buf_t *b, const void *src, size_t n) {
     int rc = ww_buf_reserve(b, n);
     if (rc) return rc;
+    if (n > b->cap - b->len) return WW_ERR_OVERFLOW;
     memcpy(b->data + b->len, src, n);
     b->len += n;
     return WW_OK;
@@ -274,6 +275,7 @@ static int rd_string(ww_rd_t *r, char **out) {
     if (rc) return rc;
     if (len == 0) return WW_ERR_BAD_STRING;  /* includes NUL */
     size_t padded = ((size_t)len + 3u) & ~(size_t)3u;
+    if (padded < (size_t)len) return WW_ERR_OVERFLOW;
     rc = rd_need(r, padded);
     if (rc) return rc;
     if (r->buf[r->pos + len - 1] != 0) return WW_ERR_BAD_STRING;
@@ -505,6 +507,72 @@ void ww_evt_in_pause_free(ww_evt_in_pause_t *m) {
 }
 
 uint32_t ww_evt_in_pause_expected_fds(const ww_evt_in_pause_t *m) {
+    (void)m;
+    return 0;
+}
+
+int ww_evt_in_mute_encode(const ww_evt_in_mute_t *m, ww_buf_t *out) {
+    int rc;
+    (void)m;
+    if ((rc = w_u32(out, m->fade_ms))) return rc;
+    return WW_OK;
+}
+
+int ww_evt_in_mute_decode(const uint8_t *buf, size_t len, ww_evt_in_mute_t *out) {
+    memset(out, 0, sizeof(*out));
+    ww_rd_t r = { buf, 0, len };
+    int rc;
+    if ((rc = rd_u32(&r, &out->fade_ms))) goto fail;
+    if (r.pos != r.len) {
+        int rc2 = WW_ERR_TRAILING;
+        (void)rc2;
+        ww_evt_in_mute_free(out);
+        return WW_ERR_TRAILING;
+    }
+    return WW_OK;
+fail:
+    ww_evt_in_mute_free(out);
+    return rc;
+}
+
+void ww_evt_in_mute_free(ww_evt_in_mute_t *m) {
+    (void)m;
+}
+
+uint32_t ww_evt_in_mute_expected_fds(const ww_evt_in_mute_t *m) {
+    (void)m;
+    return 0;
+}
+
+int ww_evt_in_unmute_encode(const ww_evt_in_unmute_t *m, ww_buf_t *out) {
+    int rc;
+    (void)m;
+    if ((rc = w_u32(out, m->fade_ms))) return rc;
+    return WW_OK;
+}
+
+int ww_evt_in_unmute_decode(const uint8_t *buf, size_t len, ww_evt_in_unmute_t *out) {
+    memset(out, 0, sizeof(*out));
+    ww_rd_t r = { buf, 0, len };
+    int rc;
+    if ((rc = rd_u32(&r, &out->fade_ms))) goto fail;
+    if (r.pos != r.len) {
+        int rc2 = WW_ERR_TRAILING;
+        (void)rc2;
+        ww_evt_in_unmute_free(out);
+        return WW_ERR_TRAILING;
+    }
+    return WW_OK;
+fail:
+    ww_evt_in_unmute_free(out);
+    return rc;
+}
+
+void ww_evt_in_unmute_free(ww_evt_in_unmute_t *m) {
+    (void)m;
+}
+
+uint32_t ww_evt_in_unmute_expected_fds(const ww_evt_in_unmute_t *m) {
     (void)m;
     return 0;
 }

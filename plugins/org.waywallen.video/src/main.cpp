@@ -10,6 +10,7 @@
 // IPC plumbing (Init handshake, reader thread, negotiate handoff) is
 // unchanged from Iter 0.
 
+#include <atomic>
 import rstd.cppstd;
 import rstd.log;
 import wavsen.video;
@@ -151,6 +152,7 @@ struct HostState {
     std::atomic<bool> shutdown { false };
     std::atomic<bool> negotiated { false };
     std::atomic<bool> paused { false };
+    std::atomic<bool> muted  { false };
 
     std::mutex              neg_mu;
     std::condition_variable neg_cv;
@@ -260,6 +262,8 @@ void apply_control(HostState& host, ww_bridge_control_t& c) {
         host.neg_cv.notify_all();
         break;
     case WW_EVT_IN_PAUSE: host.paused.store(true, std::memory_order_release); break;
+    case WW_EVT_IN_UNMUTE: host.muted.store(false, std::memory_order_release); break;
+    case WW_EVT_IN_MUTE: host.muted.store(true, std::memory_order_release); break;
     case WW_EVT_IN_SET_FPS:
     case WW_EVT_IN_POINTER_MOTION:
     case WW_EVT_IN_POINTER_BUTTON:
@@ -336,6 +340,11 @@ void sync_audio_pause(wavsen::audio::AvPlayer* av_player, bool paused) {
     } else if (av_player->is_paused()) {
         av_player->play();
     }
+}
+
+void sync_audio_mute(wavsen::audio::AvPlayer* av_player, bool muted) {
+    if (! av_player) return;
+    av_player->set_muted(muted);
 }
 
 // --selftest: open a video, decode one frame, run YuvToRgba against a
@@ -860,6 +869,9 @@ int main(int argc, char** argv) {
 
         const bool paused_now = host.paused.load(std::memory_order_acquire);
         sync_audio_pause(av_player.get(), paused_now);
+
+        const bool muted_now = host.muted.load(std::memory_order_acquire);
+        sync_audio_mute(av_player.get(), muted_now);
 
         /* hwdec change requested — apply at this loop boundary by
          * tearing down + reopening the decoder. The reopen runs the

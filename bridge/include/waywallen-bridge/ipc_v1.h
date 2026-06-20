@@ -93,6 +93,8 @@ typedef enum ww_event_in_op {
     WW_EVT_IN_SETTING_CHANGED = 2,
     WW_EVT_IN_PLAY = 3,
     WW_EVT_IN_PAUSE = 4,
+    WW_EVT_IN_MUTE = 12,
+    WW_EVT_IN_UNMUTE = 13,
     WW_EVT_IN_POINTER_MOTION = 5,
     WW_EVT_IN_SET_FPS = 6,
     WW_EVT_IN_SHUTDOWN = 7,
@@ -130,6 +132,14 @@ typedef struct ww_evt_in_play_t {
 typedef struct ww_evt_in_pause_t {
     int _empty; /* C forbids empty structs */
 } ww_evt_in_pause_t;
+
+typedef struct ww_evt_in_mute_t {
+    uint32_t fade_ms;
+} ww_evt_in_mute_t;
+
+typedef struct ww_evt_in_unmute_t {
+    uint32_t fade_ms;
+} ww_evt_in_unmute_t;
 
 typedef struct ww_evt_in_pointer_motion_t {
     float x;
@@ -270,6 +280,16 @@ int  ww_evt_in_pause_encode(const ww_evt_in_pause_t *m, ww_buf_t *out);
 int  ww_evt_in_pause_decode(const uint8_t *buf, size_t len, ww_evt_in_pause_t *out);
 void ww_evt_in_pause_free(ww_evt_in_pause_t *m);
 uint32_t ww_evt_in_pause_expected_fds(const ww_evt_in_pause_t *m);
+
+int  ww_evt_in_mute_encode(const ww_evt_in_mute_t *m, ww_buf_t *out);
+int  ww_evt_in_mute_decode(const uint8_t *buf, size_t len, ww_evt_in_mute_t *out);
+void ww_evt_in_mute_free(ww_evt_in_mute_t *m);
+uint32_t ww_evt_in_mute_expected_fds(const ww_evt_in_mute_t *m);
+
+int  ww_evt_in_unmute_encode(const ww_evt_in_unmute_t *m, ww_buf_t *out);
+int  ww_evt_in_unmute_decode(const uint8_t *buf, size_t len, ww_evt_in_unmute_t *out);
+void ww_evt_in_unmute_free(ww_evt_in_unmute_t *m);
+uint32_t ww_evt_in_unmute_expected_fds(const ww_evt_in_unmute_t *m);
 
 int  ww_evt_in_pointer_motion_encode(const ww_evt_in_pointer_motion_t *m, ww_buf_t *out);
 int  ww_evt_in_pointer_motion_decode(const uint8_t *buf, size_t len, ww_evt_in_pointer_motion_t *out);
