@@ -38,11 +38,12 @@ const ID_ROT_1H: i32 = 26;
 const ID_SEP_PL: i32 = 12;
 const ID_PAUSE: i32 = 5;
 const ID_RESUME: i32 = 6;
+const ID_SEP2: i32 = 7;
 const ID_MUTE: i32 = 27;
 const ID_UNMUTE: i32 = 28;
-const ID_SEP2: i32 = 7;
-const ID_RESCAN: i32 = 8;
 const ID_SEP3: i32 = 9;
+const ID_RESCAN: i32 = 8;
+const ID_SEP4: i32 = 29;
 const ID_QUIT: i32 = 10;
 
 /// Rotate submenu presets in display order. The leaf id and the
@@ -340,9 +341,9 @@ fn build_root(menu: &MenuState) -> ItemStruct {
         item_to_value(make_leaf(ID_SEP2, "", Some("separator"))),
         item_to_value(make_leaf(ID_MUTE, "Mute", None)),
         item_to_value(make_leaf(ID_UNMUTE, "Unmute", None)),
-        item_to_value(make_leaf(ID_SEP2, "", Some("separator"))),
-        item_to_value(make_leaf(ID_RESCAN, "Rescan wallpapers", None)),
         item_to_value(make_leaf(ID_SEP3, "", Some("separator"))),
+        item_to_value(make_leaf(ID_RESCAN, "Rescan wallpapers", None)),
+        item_to_value(make_leaf(ID_SEP4, "", Some("separator"))),
         item_to_value(make_leaf(ID_QUIT, "Quit", None)),
     ];
     (ID_ROOT, root_props(), children)
@@ -445,7 +446,7 @@ fn props_for(id: i32, menu: &MenuState) -> Option<HashMap<String, OwnedValue>> {
         ID_OPEN_UI => Some(make_leaf(id, "Open UI", None).1),
         ID_NEXT => Some(make_leaf(id, "Next", None).1),
         ID_PREV => Some(make_leaf(id, "Previous", None).1),
-        ID_SEP1 | ID_SEP2 | ID_SEP3 | ID_SEP_PL => Some(make_leaf(id, "", Some("separator")).1),
+        ID_SEP1 | ID_SEP2 | ID_SEP3 | ID_SEP4 | ID_SEP_PL => Some(make_leaf(id, "", Some("separator")).1),
         ID_SHUFFLE => Some(make_checkmark(id, "Shuffle", menu.is_shuffle).1),
         ID_ROTATE => Some(make_submenu_parent(id, "Rotate").1),
         ID_ROT_OFF | ID_ROT_30S | ID_ROT_1M | ID_ROT_5M | ID_ROT_15M | ID_ROT_1H => {
